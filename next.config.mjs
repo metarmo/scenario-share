@@ -14,8 +14,6 @@ const nextConfig = {
 
     return [
       { source: "/", headers: privateHeaders },
-      { source: "/unlock", headers: privateHeaders },
-      { source: "/api/access/:path*", headers: privateHeaders },
     ];
   },
 };
