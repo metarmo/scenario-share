@@ -217,6 +217,65 @@
   flex-wrap: wrap;
 }
 
+.passwordForm {
+  display: grid;
+  gap: 12px;
+  text-align: left;
+}
+
+.passwordForm > label {
+  color: #555861;
+  font-size: 12px;
+  font-weight: 720;
+}
+
+.passwordField {
+  display: flex;
+  min-height: 51px;
+  padding: 0 15px;
+  align-items: center;
+  gap: 10px;
+  color: #7771e7;
+  border: 1px solid #dfe0e5;
+  border-radius: 11px;
+  background: #fff;
+  box-shadow: 0 5px 17px rgba(32, 33, 38, 0.04);
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+
+.passwordField:focus-within {
+  border-color: #918bf0;
+  box-shadow: 0 0 0 4px rgba(99, 91, 255, 0.1);
+}
+
+.passwordField svg {
+  flex: 0 0 auto;
+  width: 19px;
+  height: 19px;
+}
+
+.passwordField input {
+  width: 100%;
+  min-width: 0;
+  color: #303137;
+  font: inherit;
+  font-size: 15px;
+  letter-spacing: 0.18em;
+  outline: 0;
+  border: 0;
+  background: transparent;
+}
+
+.passwordField input::placeholder {
+  color: #a6a8af;
+  letter-spacing: -0.02em;
+}
+
+.passwordForm .primaryButton {
+  width: 100%;
+  margin-top: 2px;
+}
+
 .loginFinePrint {
   margin-top: 16px;
   color: #a0a2aa;

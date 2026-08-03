@@ -23,6 +23,19 @@ NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=sb_publishable_REPLACE_ME
 
 Never put a `service_role` key, OAuth secret, or other server secret in a `NEXT_PUBLIC_*` variable.
 
+The public link is protected by a server-side shared password before Google
+sign-in. Add these values only to `.env.local` and the hosting provider's secret
+settings; never commit the real values:
+
+```env
+SCENARIO_SHARE_GATE_PASSWORD=REPLACE_WITH_SHARED_PASSWORD
+SCENARIO_SHARE_GATE_SIGNING_SECRET=REPLACE_WITH_RANDOM_32_PLUS_CHARACTER_SECRET
+```
+
+Generate the signing secret with a cryptographically secure password manager or
+`openssl rand -hex 32`. The server issues a signed, `HttpOnly` cookie that lasts
+12 hours; the password is never placed in the client bundle or cookie.
+
 ## Supabase
 
 - Project: `ScenarioShare` (`hxjlmqdoqsnsmunkrtuk`)
@@ -59,6 +72,25 @@ The first `@metarmo.com` Google user claims the workspace. Every later user must
 - IndexedDB keeps offline changes, while an append-only Postgres update log and full snapshots restore state after reconnecting.
 - Manual saves record a full Yjs snapshot and author; each document keeps its latest 30 versions.
 - Public-schema tables, Storage objects, and Realtime channels are protected by workspace-membership RLS.
+
+## Access flow
+
+1. The public `/scenario-share` URL redirects visitors without a valid gate
+   cookie to the password screen.
+2. A correct server-validated password unlocks Google sign-in for 12 hours.
+3. Supabase Google Auth supplies the stable user UUID used by Yjs cursors,
+   document updates, versions, comments, and attachments.
+4. Workspace membership and RLS remain the data-authorization boundary; the
+   shared password does not make documents anonymously readable.
+
+Protected HTML and API responses use `private, no-store` cache headers. Hashed
+JavaScript and CSS assets may remain publicly cacheable, but they contain no
+shared password or ScenarioShare document data.
+
+Because a four-digit shared password has only 10,000 combinations, production
+hosting must also enforce a distributed IP rate limit or WAF rule (recommended:
+five failed submissions per ten minutes). The in-process limiter is only a
+bounded fallback and is not the security boundary in a multi-instance runtime.
 
 ## Verification
 
