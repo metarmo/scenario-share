@@ -270,9 +270,14 @@ export function ScenarioShareApp() {
   const signOut = async () => {
     if (!supabase) return;
     setBusy(true);
-    const { error } = await supabase.auth.signOut();
-    if (error) setNotice({ tone: "error", message: error.message });
-    setBusy(false);
+    await supabase.auth.signOut().catch(() => null);
+
+    const form = window.document.createElement("form");
+    form.method = "post";
+    form.action = "/scenario-share/api/access/logout";
+    form.hidden = true;
+    window.document.body.appendChild(form);
+    form.submit();
   };
 
   const createDocument = async (parentId = null) => {
@@ -340,16 +345,16 @@ export function ScenarioShareApp() {
     return (
       <CenteredShell>
         <div className={styles.loginMark}><LuBookOpen /></div>
-        <div className={styles.brandPill}>METARMO × PLAZMA</div>
-        <h1>이야기를 함께 만드는 공간</h1>
+        <div className={styles.brandPill}>ACCESS VERIFIED · STEP 2</div>
+        <h1>Google 계정으로 편집자 확인</h1>
         <p className={styles.stateDescription}>
-          시나리오, 설정, 아이디어를 한곳에 정리하고 같은 순간에 함께 편집하세요.
+          로그인한 Google 계정의 고유 ID가 문서 편집, 버전 저장, 댓글과 실시간 커서의 작성자로 기록됩니다.
         </p>
         <button className={styles.googleButton} onClick={signIn} disabled={busy}>
           <GoogleMark />
           {busy ? "Google로 이동하는 중…" : "Google 계정으로 계속"}
         </button>
-        <p className={styles.loginFinePrint}>초대된 METARMO와 Plazma 구성원만 입장할 수 있습니다.</p>
+        <p className={styles.loginFinePrint}>Google 인증 후 초대된 METARMO와 Plazma 구성원만 편집 공간에 입장할 수 있습니다.</p>
         {notice && <InlineNotice notice={notice} />}
       </CenteredShell>
     );
