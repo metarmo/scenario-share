@@ -23,19 +23,6 @@ NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=sb_publishable_REPLACE_ME
 
 Never put a `service_role` key, OAuth secret, or other server secret in a `NEXT_PUBLIC_*` variable.
 
-The public link is protected by a server-side shared password before Google
-sign-in. Add these values only to `.env.local` and the hosting provider's secret
-settings; never commit the real values:
-
-```env
-SCENARIO_SHARE_GATE_PASSWORD=REPLACE_WITH_SHARED_PASSWORD
-SCENARIO_SHARE_GATE_SIGNING_SECRET=REPLACE_WITH_RANDOM_32_PLUS_CHARACTER_SECRET
-```
-
-Generate the signing secret with a cryptographically secure password manager or
-`openssl rand -hex 32`. The server issues a signed, `HttpOnly` cookie that lasts
-12 hours; the password is never placed in the client bundle or cookie.
-
 ## Supabase
 
 - Project: `ScenarioShare` (`hxjlmqdoqsnsmunkrtuk`)
@@ -50,7 +37,7 @@ codex mcp add supabase-scenarioshare --url 'https://mcp.supabase.com/mcp?project
 codex mcp login supabase-scenarioshare
 ```
 
-## Google sign-in blocker
+## Google sign-in and account allowlist
 
 Google authentication remains unavailable until a Google Cloud Web OAuth client is created and the Google provider is enabled in Supabase.
 
@@ -62,7 +49,23 @@ https://hxjlmqdoqsnsmunkrtuk.supabase.co/auth/v1/callback
 
 Add each actual app host as an Authorized JavaScript origin. In Supabase Auth URL Configuration, use `https://scenario-share.vercel.app` as the intended Site URL and allow the exact local and production root URLs. Add approved Vercel preview URLs separately when previews need Google sign-in.
 
-The initial owner uses a two-step bootstrap: sign in with the intended Google account once so Supabase creates the Auth user, then have a trusted Supabase administrator insert a one-time `owner` invitation using that user's UUID as `invited_by`. The user can then choose **다시 확인** to claim ownership. Every later user must also be invited by email before signing in. This prevents an arbitrary Google user from bypassing the shared-link gate and claiming ownership through the public Supabase API. Before production, disable public Realtime channel access; the client uses only private channels whose authorization is enforced through `realtime.messages` RLS.
+Only these Google accounts are allowed:
+
+- `kevin34320710@gmail.com` (`owner`)
+- `nekoya404@gmail.com` (`editor`)
+
+Supabase's `before_user_created` hook rejects every other account before it is
+created, and the `custom_access_token` hook rejects token issuance and refreshes
+for every other email. The claim RPC automatically provisions the two allowed
+accounts with the roles above. The client repeats the allowlist check only for
+immediate UX; Auth hooks and database policies are the security boundaries.
+
+The hook functions are installed by the latest migration and enabled locally in
+`supabase/config.toml`. For a hosted project, enable both Postgres hooks under
+**Authentication > Hooks** (or deploy the matching project configuration) after
+the migration is applied.
+
+Before production, disable public Realtime channel access; the client uses only private channels whose authorization is enforced through `realtime.messages` RLS.
 
 ## Collaboration model
 
@@ -75,22 +78,18 @@ The initial owner uses a two-step bootstrap: sign in with the intended Google ac
 
 ## Access flow
 
-1. The public root URL redirects visitors without a valid gate
-   cookie to the password screen.
-2. A correct server-validated password unlocks Google sign-in for 12 hours.
+1. The root URL shows Google sign-in directly; there is no shared password or
+   PIN gate.
+2. Supabase Auth issues a session only when the normalized Google email exactly
+   matches one of the two approved accounts.
 3. Supabase Google Auth supplies the stable user UUID used by Yjs cursors,
    document updates, versions, comments, and attachments.
-4. Workspace membership and RLS remain the data-authorization boundary; the
-   shared password does not make documents anonymously readable.
+4. The claim RPC provisions the approved account, while Postgres, Storage, and
+   private Realtime RLS re-check both account allowlisting and workspace role.
 
 Protected HTML and API responses use `private, no-store` cache headers. Hashed
 JavaScript and CSS assets may remain publicly cacheable, but they contain no
-shared password or ScenarioShare document data.
-
-Because a four-digit shared password has only 10,000 combinations, production
-hosting must also enforce a distributed IP rate limit or WAF rule (recommended:
-five failed submissions per ten minutes). The in-process limiter is only a
-bounded fallback and is not the security boundary in a multi-instance runtime.
+ScenarioShare document data.
 
 ## Verification
 

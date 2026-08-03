@@ -217,65 +217,6 @@
   flex-wrap: wrap;
 }
 
-.passwordForm {
-  display: grid;
-  gap: 12px;
-  text-align: left;
-}
-
-.passwordForm > label {
-  color: #555861;
-  font-size: 12px;
-  font-weight: 720;
-}
-
-.passwordField {
-  display: flex;
-  min-height: 51px;
-  padding: 0 15px;
-  align-items: center;
-  gap: 10px;
-  color: #7771e7;
-  border: 1px solid #dfe0e5;
-  border-radius: 11px;
-  background: #fff;
-  box-shadow: 0 5px 17px rgba(32, 33, 38, 0.04);
-  transition: border-color 150ms ease, box-shadow 150ms ease;
-}
-
-.passwordField:focus-within {
-  border-color: #918bf0;
-  box-shadow: 0 0 0 4px rgba(99, 91, 255, 0.1);
-}
-
-.passwordField svg {
-  flex: 0 0 auto;
-  width: 19px;
-  height: 19px;
-}
-
-.passwordField input {
-  width: 100%;
-  min-width: 0;
-  color: #303137;
-  font: inherit;
-  font-size: 15px;
-  letter-spacing: 0.18em;
-  outline: 0;
-  border: 0;
-  background: transparent;
-}
-
-.passwordField input::placeholder {
-  color: #a6a8af;
-  letter-spacing: -0.02em;
-}
-
-.passwordForm .primaryButton {
-  width: 100%;
-  margin-top: 2px;
-}
-
 .loginFinePrint {
   margin-top: 16px;
   color: #a0a2aa;
@@ -1390,17 +1331,6 @@
 .modalHeader h2 { color: #313239; font-size: 22px; font-weight: 740; letter-spacing: -0.04em; }
 .modalHeader p { margin-top: 5px; color: #92949b; font-size: 10px; }
 
-.inviteForm { padding: 18px 25px; border-bottom: 1px solid #ececf0; background: #fafafd; }
-.inviteForm label > span { display: block; margin-bottom: 7px; color: #64666e; font-size: 10px; font-weight: 670; }
-.inviteInputRow { display: flex; gap: 7px; }
-.emailInput { display: flex; flex: 1; height: 39px; padding: 0 10px; align-items: center; gap: 7px; color: #a1a3aa; border: 1px solid #dfe0e5; border-radius: 8px; background: #fff; }
-.emailInput:focus-within { border-color: #9993ed; box-shadow: 0 0 0 3px rgba(99, 91, 255, 0.08); }
-.emailInput input { width: 100%; min-width: 0; color: #4b4d54; font: inherit; font-size: 11px; outline: 0; border: 0; }
-.inviteInputRow select { width: 90px; padding: 0 9px; color: #55575f; font: inherit; font-size: 10px; outline: 0; border: 1px solid #dfe0e5; border-radius: 8px; background: #fff; }
-.inviteButton { display: flex; height: 39px; padding: 0 13px; align-items: center; gap: 6px; color: #fff; font: inherit; font-size: 10px; font-weight: 680; cursor: pointer; border: 0; border-radius: 8px; background: #635bff; }
-.inviteButton:disabled { cursor: default; opacity: 0.45; }
-.formMessage { display: flex; margin-top: 8px; align-items: center; gap: 4px; color: #3e805b; font-size: 9px; }
-.formMessageError { color: #ad4d4d; }
 
 .memberListHeader { display: flex; padding: 17px 25px 8px; align-items: center; gap: 6px; color: #777981; font-size: 9px; font-weight: 680; }
 .memberListHeader strong { display: grid; min-width: 18px; height: 18px; padding: 0 4px; place-items: center; color: #817bea; font-size: 8px; border-radius: 99px; background: #efeeff; }
@@ -1413,9 +1343,6 @@
 .memberIdentity span { overflow: hidden; color: #9b9da4; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
 .memberRole { display: flex; min-width: 60px; align-items: center; justify-content: flex-end; gap: 4px; color: #777981; font-size: 9px; }
 .memberRole svg { color: #d09637; }
-.pendingAvatar { color: #999ba3; background: #f0f0f3; }
-.revokeButton { display: grid; width: 29px; height: 29px; place-items: center; color: #a0a2a9; cursor: pointer; border: 0; border-radius: 7px; background: transparent; }
-.revokeButton:hover { color: #ba5050; background: #fff0f0; }
 
 @media (max-width: 1180px) {
   .pageCanvas { padding-right: 65px; padding-left: 65px; }
@@ -1520,11 +1447,6 @@
   .modalLayer { padding: 0; place-items: end center; }
   .membersModal { width: 100%; max-height: 92dvh; border-radius: 20px 20px 0 0; }
   .modalHeader { padding: 21px 18px 17px; }
-  .inviteForm { padding: 15px 18px; }
-  .inviteInputRow { flex-wrap: wrap; }
-  .emailInput { flex: 1 0 100%; }
-  .inviteInputRow select { flex: 1; }
-  .inviteButton { flex: 1; justify-content: center; }
   .memberListHeader { padding-right: 18px; padding-left: 18px; }
   .memberList { padding: 0 10px; }
 }

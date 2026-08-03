@@ -11,6 +11,7 @@ This repository contains only ScenarioShare, an independent private realtime wik
 - Supabase Auth, Postgres, Storage, and private Realtime channels.
 - IndexedDB preserves offline edits; Postgres snapshots and an append-only update log restore sessions.
 - Workspace membership and RLS protect documents, comments, versions, attachments, and Realtime messages.
+- Google Auth is restricted to `kevin34320710@gmail.com` and `nekoya404@gmail.com` by Auth hooks, client UX checks, and database authorization helpers.
 - Supabase project ref: `hxjlmqdoqsnsmunkrtuk`.
 - Intended public URL: `https://scenario-share.vercel.app`.
 

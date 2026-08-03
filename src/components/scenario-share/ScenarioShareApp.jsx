@@ -17,6 +17,10 @@ import {
   getSupabaseBrowserClient,
   supabaseEnvironment,
 } from "@/lib/supabase/client";
+import {
+  isAllowedLoginEmail,
+  normalizeLoginEmail,
+} from "@/lib/scenario-share/auth-access.mjs";
 import { CollaborativeDocument } from "./CollaborativeDocument";
 import { MembersModal } from "./MembersModal";
 import { WikiSidebar } from "./WikiSidebar";
@@ -72,6 +76,44 @@ export function ScenarioShareApp() {
     if (!supabase) return undefined;
 
     let active = true;
+    const rejectedUsers = new Set();
+    const applySession = (session) => {
+      const sessionUser = session?.user || null;
+
+      if (sessionUser && !isAllowedLoginEmail(sessionUser.email)) {
+        const rejectedEmail = normalizeLoginEmail(sessionUser.email);
+        setUser(null);
+        setAuthState("signed-out");
+        setMembership(null);
+        setWorkspaceState("idle");
+        setDocuments([]);
+        setMembers([]);
+        setNotice({
+          tone: "error",
+          message: rejectedEmail
+            ? `${rejectedEmail} 계정은 ScenarioShare에 로그인할 수 없습니다.`
+            : "이 Google 계정은 ScenarioShare에 로그인할 수 없습니다.",
+        });
+
+        if (!rejectedUsers.has(sessionUser.id)) {
+          rejectedUsers.add(sessionUser.id);
+          window.setTimeout(() => {
+            supabase.auth.signOut({ scope: "local" }).catch(() => null);
+          }, 0);
+        }
+        return;
+      }
+
+      setUser(sessionUser);
+      setAuthState(sessionUser ? "signed-in" : "signed-out");
+      if (!sessionUser) {
+        setMembership(null);
+        setWorkspaceState("idle");
+        setDocuments([]);
+        setMembers([]);
+      }
+    };
+
     supabase.auth.getSession().then(({ data, error }) => {
       if (!active) return;
       if (error) {
@@ -79,20 +121,12 @@ export function ScenarioShareApp() {
         setAuthState("signed-out");
         return;
       }
-      setUser(data.session?.user || null);
-      setAuthState(data.session?.user ? "signed-in" : "signed-out");
+      applySession(data.session);
     });
 
     const { data: subscription } = supabase.auth.onAuthStateChange(
       (_event, session) => {
-        setUser(session?.user || null);
-        setAuthState(session?.user ? "signed-in" : "signed-out");
-        if (!session?.user) {
-          setMembership(null);
-          setWorkspaceState("idle");
-          setDocuments([]);
-          setMembers([]);
-        }
+        applySession(session);
       },
     );
 
@@ -270,14 +304,11 @@ export function ScenarioShareApp() {
   const signOut = async () => {
     if (!supabase) return;
     setBusy(true);
-    await supabase.auth.signOut().catch(() => null);
-
-    const form = window.document.createElement("form");
-    form.method = "post";
-    form.action = "/api/access/logout";
-    form.hidden = true;
-    window.document.body.appendChild(form);
-    form.submit();
+    const { error } = await supabase.auth.signOut({ scope: "local" });
+    setBusy(false);
+    if (error) {
+      setNotice({ tone: "error", message: `로그아웃하지 못했습니다: ${error.message}` });
+    }
   };
 
   const createDocument = async (parentId = null) => {
@@ -345,7 +376,7 @@ export function ScenarioShareApp() {
     return (
       <CenteredShell>
         <div className={styles.loginMark}><LuBookOpen /></div>
-        <div className={styles.brandPill}>ACCESS VERIFIED · STEP 2</div>
+        <div className={styles.brandPill}>PRIVATE WORKSPACE · GOOGLE</div>
         <h1>Google 계정으로 편집자 확인</h1>
         <p className={styles.stateDescription}>
           로그인한 Google 계정의 고유 ID가 문서 편집, 버전 저장, 댓글과 실시간 커서의 작성자로 기록됩니다.
@@ -354,7 +385,7 @@ export function ScenarioShareApp() {
           <GoogleMark />
           {busy ? "Google로 이동하는 중…" : "Google 계정으로 계속"}
         </button>
-        <p className={styles.loginFinePrint}>Google 인증 후 초대된 구성원만 편집 공간에 입장할 수 있습니다.</p>
+        <p className={styles.loginFinePrint}>지정된 두 Google 계정만 편집 공간에 입장할 수 있습니다.</p>
         {notice && <InlineNotice notice={notice} />}
       </CenteredShell>
     );
@@ -368,10 +399,10 @@ export function ScenarioShareApp() {
     return (
       <CenteredShell>
         <div className={styles.stateIcon}><LuUsers /></div>
-        <div className={styles.brandPill}>초대 전용 워크스페이스</div>
-        <h1>아직 초대를 받지 않았습니다</h1>
+        <div className={styles.brandPill}>접근 권한 확인</div>
+        <h1>워크스페이스 권한을 확인할 수 없습니다</h1>
         <p className={styles.stateDescription}>
-          <strong>{user?.email}</strong> 계정으로 초대가 도착하면 이 화면에서 바로 참여할 수 있습니다.
+          <strong>{user?.email}</strong> 허용 계정 설정이 적용되었는지 확인한 뒤 다시 시도해 주세요.
         </p>
         <div className={styles.stateActions}>
           <button className={styles.primaryButton} onClick={claimWorkspace}>
@@ -460,11 +491,7 @@ export function ScenarioShareApp() {
       <MembersModal
         open={membersOpen}
         onClose={() => setMembersOpen(false)}
-        supabase={supabase}
-        workspaceId={membership.workspace_id}
-        membership={membership}
         members={members}
-        onRefresh={() => fetchMembers(membership.workspace_id)}
         currentUser={user}
       />
     </main>
