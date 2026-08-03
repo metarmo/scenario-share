@@ -1,23 +1,38 @@
 /* eslint-disable @next/next/no-img-element */
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  LuArchive,
   LuBookOpen,
   LuChevronDown,
   LuChevronRight,
-  LuFileText,
-  LuLogOut,
   LuEllipsis,
+  LuFilePlus2,
+  LuFileText,
+  LuFolder,
+  LuFolderInput,
+  LuFolderOpen,
+  LuFolderPlus,
+  LuLogOut,
   LuPanelLeftClose,
   LuPencil,
   LuPlus,
   LuSearch,
+  LuTrash2,
   LuX,
 } from "react-icons/lu";
-import { descendantsOf, initials, profileFromUser } from "./utils";
+import {
+  DOCUMENT_ITEM_TYPE,
+  FOLDER_ITEM_TYPE,
+  isDocument,
+  isFolder,
+  movableFolderOptions,
+} from "@/lib/scenario-share/document-tree.mjs";
+import { initials, profileFromUser } from "./utils";
 import styles from "./ScenarioShare.module.css";
+
+const MENU_WIDTH = 190;
+const MENU_HEIGHT = 270;
 
 export function WikiSidebar({
   open,
@@ -25,6 +40,8 @@ export function WikiSidebar({
   selectedDocumentId,
   onSelect,
   onCreate,
+  onMove,
+  onDelete,
   onDocumentsChange,
   onClose,
   supabase,
@@ -38,20 +55,37 @@ export function WikiSidebar({
   const [expanded, setExpanded] = useState(() => new Set());
   const [editingId, setEditingId] = useState(null);
   const [editingTitle, setEditingTitle] = useState("");
-  const [menuId, setMenuId] = useState(null);
+  const [contextMenu, setContextMenu] = useState(null);
   const [pendingId, setPendingId] = useState(null);
+  const [movingItemId, setMovingItemId] = useState(null);
+  const [moveParentId, setMoveParentId] = useState("");
+  const contextMenuRef = useRef(null);
+  const contextMenuTriggerRef = useRef(null);
   const profile = profileFromUser(user);
+  const canEdit = membership.role !== "viewer";
+
+  useEffect(() => {
+    if (!contextMenu) return undefined;
+    const frame = window.requestAnimationFrame(() => {
+      contextMenuRef.current?.querySelector("button")?.focus();
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [contextMenu]);
 
   const childrenByParent = useMemo(() => {
     const map = new Map();
-    for (const document of documents) {
-      const key = document.parent_id || "root";
+    for (const item of documents) {
+      const key = item.parent_id || "root";
       const children = map.get(key) || [];
-      children.push(document);
+      children.push(item);
       map.set(key, children);
     }
     for (const children of map.values()) {
-      children.sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
+      children.sort((a, b) => {
+        const order = (a.sort_order || 0) - (b.sort_order || 0);
+        if (order) return order;
+        return String(a.created_at || "").localeCompare(String(b.created_at || ""));
+      });
     }
     return map;
   }, [documents]);
@@ -60,131 +94,218 @@ export function WikiSidebar({
     const query = search.trim().toLocaleLowerCase("ko");
     if (!query) return null;
     return documents.filter((document) =>
-      `${document.title || ""}\n${document.plain_text || ""}`
+      isDocument(document) && `${document.title || ""}\n${document.plain_text || ""}`
         .toLocaleLowerCase("ko")
         .includes(query),
     );
   }, [documents, search]);
 
-  const toggleExpanded = (documentId) => {
+  const movingItem = documents.find((item) => item.id === movingItemId) || null;
+  const folderOptions = useMemo(
+    () => movingItemId ? movableFolderOptions(documents, movingItemId) : [],
+    [documents, movingItemId],
+  );
+
+  const toggleExpanded = (itemId) => {
     setExpanded((current) => {
       const next = new Set(current);
-      if (next.has(documentId)) next.delete(documentId);
-      else next.add(documentId);
+      if (next.has(itemId)) next.delete(itemId);
+      else next.add(itemId);
       return next;
     });
   };
 
-  const createChild = async (parentId) => {
-    setMenuId(null);
-    const created = await onCreate(parentId);
-    if (created) setExpanded((current) => new Set([...current, parentId]));
+  const openMenu = ({ item = null, parentId = null, x, y }) => {
+    if (!canEdit) return;
+    const maxX = Math.max(8, window.innerWidth - MENU_WIDTH - 8);
+    const maxY = Math.max(8, window.innerHeight - MENU_HEIGHT - 8);
+    setContextMenu({
+      itemId: item?.id || null,
+      parentId,
+      x: Math.min(Math.max(8, x), maxX),
+      y: Math.min(Math.max(8, y), maxY),
+    });
   };
 
-  const startRename = (document) => {
-    setEditingId(document.id);
-    setEditingTitle(document.title || "");
-    setMenuId(null);
+  const openRootMenu = (event) => {
+    if (!canEdit) return;
+    event.preventDefault();
+    event.stopPropagation();
+    contextMenuTriggerRef.current = event.currentTarget.querySelector?.("button") || null;
+    openMenu({ x: event.clientX, y: event.clientY, parentId: null });
   };
 
-  const saveRename = async (document) => {
-    const title = editingTitle.trim() || "제목 없는 문서";
+  const openRootMenuFromButton = (event) => {
+    contextMenuTriggerRef.current = event.currentTarget;
+    const bounds = event.currentTarget.getBoundingClientRect();
+    openMenu({ x: bounds.right - MENU_WIDTH, y: bounds.bottom + 4, parentId: null });
+  };
+
+  const openItemMenu = (event, item) => {
+    if (!canEdit) return;
+    event.preventDefault();
+    event.stopPropagation();
+    contextMenuTriggerRef.current = event.currentTarget.querySelector?.("button[aria-label$='메뉴']") || null;
+    const parentId = isFolder(item) ? item.id : item.parent_id || null;
+    openMenu({ item, parentId, x: event.clientX, y: event.clientY });
+  };
+
+  const openItemMenuFromButton = (event, item) => {
+    event.stopPropagation();
+    contextMenuTriggerRef.current = event.currentTarget;
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const parentId = isFolder(item) ? item.id : item.parent_id || null;
+    openMenu({ item, parentId, x: bounds.right - MENU_WIDTH, y: bounds.bottom + 3 });
+  };
+
+  const createItem = async (itemType) => {
+    const parentId = contextMenu?.parentId || null;
+    setContextMenu(null);
+    setPendingId("create");
+    const created = await onCreate({ parentId, itemType });
+    setPendingId(null);
+    if (!created) return;
+
+    if (parentId) {
+      setExpanded((current) => new Set([...current, parentId]));
+    }
+    if (isFolder(created)) {
+      setEditingId(created.id);
+      setEditingTitle(created.title || "새 폴더");
+    }
+  };
+
+  const startRename = (item) => {
+    setEditingId(item.id);
+    setEditingTitle(item.title || (isFolder(item) ? "새 폴더" : "제목 없는 문서"));
+    setContextMenu(null);
+  };
+
+  const saveRename = async (item) => {
+    const fallback = isFolder(item) ? "새 폴더" : "제목 없는 문서";
+    const title = editingTitle.trim() || fallback;
     setEditingId(null);
-    if (title === document.title) return;
-    setPendingId(document.id);
+    if (title === item.title) return;
+    setPendingId(item.id);
     const { error } = await supabase
       .from("documents")
       .update({ title })
-      .eq("id", document.id);
+      .eq("id", item.id);
     setPendingId(null);
     if (!error) {
       onDocumentsChange((current) =>
-        current.map((item) => item.id === document.id ? { ...item, title } : item),
+        current.map((currentItem) => currentItem.id === item.id
+          ? { ...currentItem, title }
+          : currentItem),
       );
     }
   };
 
-  const archiveDocument = async (document) => {
-    setMenuId(null);
-    const count = descendantsOf(documents, document.id).length;
-    const confirmed = window.confirm(
-      count > 1
-        ? `“${document.title}” 문서와 하위 문서 ${count - 1}개를 보관할까요?`
-        : `“${document.title}” 문서를 보관할까요?`,
+  const openMoveDialog = (item) => {
+    setContextMenu(null);
+    setMovingItemId(item.id);
+    const parentIsFolder = documents.some(
+      (candidate) => candidate.id === item.parent_id && isFolder(candidate),
     );
-    if (!confirmed) return;
-    const ids = descendantsOf(documents, document.id);
-    setPendingId(document.id);
-    const { error } = await supabase
-      .from("documents")
-      .update({ archived_at: new Date().toISOString() })
-      .in("id", ids);
+    setMoveParentId(parentIsFolder ? item.parent_id : "");
+  };
+
+  const moveItem = async () => {
+    if (!movingItem) return;
+    setPendingId(movingItem.id);
+    const parentId = moveParentId || null;
+    const moved = await onMove(movingItem.id, parentId);
     setPendingId(null);
-    if (!error) onDocumentsChange((current) => current.filter((item) => !ids.includes(item.id)));
+    if (!moved) return;
+    if (parentId) setExpanded((current) => new Set([...current, parentId]));
+    setMovingItemId(null);
+  };
+
+  const deleteItem = async (item) => {
+    setContextMenu(null);
+    setPendingId(item.id);
+    await onDelete(item.id);
+    setPendingId(null);
   };
 
   const renderTree = (parentId = null, depth = 0) => {
     const children = childrenByParent.get(parentId || "root") || [];
-    return children.map((document) => {
-      const hasChildren = (childrenByParent.get(document.id) || []).length > 0;
-      const isExpanded = expanded.has(document.id);
+    return children.map((item) => {
+      const hasChildren = (childrenByParent.get(item.id) || []).length > 0;
+      const isExpanded = expanded.has(item.id);
+      const folder = isFolder(item);
+      const deletionPending = Boolean(item.deletion_token);
       return (
-        <div key={document.id} className={styles.treeBranch}>
+        <div key={item.id} className={styles.treeBranch}>
           <div
-            className={`${styles.treeRow} ${selectedDocumentId === document.id ? styles.treeRowActive : ""}`}
+            className={`${styles.treeRow} ${selectedDocumentId === item.id ? styles.treeRowActive : ""} ${folder ? styles.treeFolderRow : ""}`}
             style={{ "--tree-depth": depth }}
+            onContextMenu={(event) => openItemMenu(event, item)}
           >
             <button
               className={styles.treeChevron}
-              onClick={() => toggleExpanded(document.id)}
+              onClick={() => toggleExpanded(item.id)}
               disabled={!hasChildren}
-              aria-label={isExpanded ? "하위 문서 접기" : "하위 문서 펼치기"}
+              aria-label={isExpanded ? "하위 항목 접기" : "하위 항목 펼치기"}
             >
-              {hasChildren ? (isExpanded ? <LuChevronDown /> : <LuChevronRight />) : <LuFileText />}
+              {hasChildren && (isExpanded ? <LuChevronDown /> : <LuChevronRight />)}
             </button>
-            {editingId === document.id ? (
+            {editingId === item.id ? (
               <input
                 className={styles.treeRenameInput}
                 value={editingTitle}
                 autoFocus
                 onChange={(event) => setEditingTitle(event.target.value)}
-                onBlur={() => saveRename(document)}
+                onBlur={() => saveRename(item)}
                 onKeyDown={(event) => {
                   if (event.key === "Enter") event.currentTarget.blur();
                   if (event.key === "Escape") setEditingId(null);
                 }}
               />
             ) : (
-              <button className={styles.treeTitle} onClick={() => onSelect(document.id)} title={document.title}>
-                {document.icon && <span>{document.icon}</span>}
-                {document.title || "제목 없는 문서"}
+              <button
+                className={styles.treeTitle}
+                onClick={() => folder ? toggleExpanded(item.id) : !deletionPending && onSelect(item.id)}
+                title={deletionPending ? `${item.title} · 영구 삭제 대기 중` : item.title}
+                aria-disabled={!folder && deletionPending}
+              >
+                <span className={styles.treeItemIcon}>
+                  {folder
+                    ? (isExpanded ? <LuFolderOpen /> : <LuFolder />)
+                    : <LuFileText />}
+                </span>
+                <span className={styles.treeItemLabel}>
+                  <span>{item.title || (folder ? "새 폴더" : "제목 없는 문서")}</span>
+                  {deletionPending && <small>삭제 대기</small>}
+                </span>
               </button>
             )}
-            <button
-              className={styles.treeMore}
-              onClick={() => setMenuId((current) => current === document.id ? null : document.id)}
-              aria-label="문서 메뉴"
-              disabled={pendingId === document.id}
-            >
-              <LuEllipsis />
-            </button>
-            {menuId === document.id && (
-              <>
-                <button className={styles.menuBackdrop} onClick={() => setMenuId(null)} aria-label="메뉴 닫기" />
-                <div className={styles.treeMenu}>
-                  <button onClick={() => createChild(document.id)}><LuPlus /> 하위 문서</button>
-                  <button onClick={() => startRename(document)}><LuPencil /> 이름 바꾸기</button>
-                  <span />
-                  <button className={styles.dangerMenuItem} onClick={() => archiveDocument(document)}><LuArchive /> 보관하기</button>
-                </div>
-              </>
+            {canEdit && (
+              <button
+                className={styles.treeMore}
+                onClick={(event) => openItemMenuFromButton(event, item)}
+                aria-label={`${folder ? "폴더" : "문서"} 메뉴`}
+                disabled={pendingId === item.id}
+              >
+                <LuEllipsis />
+              </button>
             )}
           </div>
-          {hasChildren && isExpanded && renderTree(document.id, depth + 1)}
+          {hasChildren && isExpanded && renderTree(item.id, depth + 1)}
         </div>
       );
     });
   };
+
+  const menuItem = contextMenu?.itemId
+    ? documents.find((item) => item.id === contextMenu.itemId)
+    : null;
+  const menuItemPending = Boolean(menuItem?.deletion_token);
+  const menuParentPending = Boolean(
+    contextMenu?.parentId
+      && documents.find((item) => item.id === contextMenu.parentId)?.deletion_token,
+  );
+  const canCreateAtMenu = !menuParentPending && (!menuItemPending || !isFolder(menuItem));
 
   return (
     <aside className={`${styles.sidebar} ${open ? styles.sidebarOpen : ""}`}>
@@ -199,26 +320,105 @@ export function WikiSidebar({
           <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="문서 내용 검색" />
           {search && <button onClick={() => setSearch("")} aria-label="검색 지우기"><LuX /></button>}
         </label>
-        <button className={styles.newDocumentButton} onClick={() => onCreate(null)}><LuPlus /> 새 문서</button>
       </div>
 
-      <div className={styles.sidebarSectionHeading}>
+      <div className={styles.sidebarSectionHeading} onContextMenu={openRootMenu}>
         <span>{searchResults ? `검색 결과 ${searchResults.length}` : "문서"}</span>
-        {!searchResults && <LuBookOpen />}
+        {!searchResults && (canEdit ? (
+          <button
+            className={styles.treeCreateMenuButton}
+            onClick={openRootMenuFromButton}
+            aria-label="새 폴더 또는 문서 만들기"
+            title="새 폴더 또는 문서 만들기"
+            disabled={pendingId === "create"}
+          >
+            <LuPlus />
+          </button>
+        ) : <LuBookOpen />)}
       </div>
 
-      <nav className={styles.documentTree} aria-label="위키 문서">
+      <nav
+        className={styles.documentTree}
+        aria-label="위키 문서"
+        onContextMenu={openRootMenu}
+      >
         {searchResults ? (
           searchResults.length ? searchResults.map((document) => (
-            <button key={document.id} className={`${styles.searchResult} ${selectedDocumentId === document.id ? styles.searchResultActive : ""}`} onClick={() => onSelect(document.id)}>
+            <button
+              key={document.id}
+              className={`${styles.searchResult} ${selectedDocumentId === document.id ? styles.searchResultActive : ""}`}
+              onClick={() => onSelect(document.id)}
+              onContextMenu={(event) => openItemMenu(event, document)}
+            >
               <span><LuFileText /> {document.title || "제목 없는 문서"}</span>
               {document.plain_text && <small>{document.plain_text.slice(0, 90)}</small>}
             </button>
           )) : <div className={styles.noSearchResults}><LuSearch /><p>일치하는 문서가 없습니다</p></div>
         ) : documents.length ? renderTree() : (
-          <button className={styles.sidebarEmpty} onClick={() => onCreate(null)}><LuPlus /><span>아직 문서가 없습니다<br /><strong>첫 문서 만들기</strong></span></button>
+          <div className={styles.sidebarEmpty}>
+            <LuFolderPlus />
+            <span>{canEdit ? <>+ 버튼 또는 이 영역을 우클릭해<br /><strong>폴더 또는 문서 만들기</strong></> : "아직 문서가 없습니다"}</span>
+          </div>
         )}
       </nav>
+
+      {contextMenu && (
+        <>
+          <button className={styles.menuBackdrop} onClick={() => setContextMenu(null)} aria-label="메뉴 닫기" />
+          <div
+            ref={contextMenuRef}
+            className={styles.treeContextMenu}
+            style={{ left: contextMenu.x, top: contextMenu.y }}
+            role="menu"
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                event.preventDefault();
+                setContextMenu(null);
+                window.requestAnimationFrame(() => contextMenuTriggerRef.current?.focus());
+              }
+            }}
+          >
+            {canCreateAtMenu && (
+              <>
+                <button role="menuitem" onClick={() => createItem(FOLDER_ITEM_TYPE)}><LuFolderPlus /> 새 폴더</button>
+                <button role="menuitem" onClick={() => createItem(DOCUMENT_ITEM_TYPE)}><LuFilePlus2 /> 새 문서</button>
+              </>
+            )}
+            {menuItem && (
+              <>
+                {!menuItemPending && <span />}
+                {!menuItemPending && <button role="menuitem" onClick={() => startRename(menuItem)}><LuPencil /> 이름 바꾸기</button>}
+                {!menuItemPending && <button role="menuitem" onClick={() => openMoveDialog(menuItem)}><LuFolderInput /> 폴더로 이동</button>}
+                <span />
+                <button role="menuitem" className={styles.dangerMenuItem} onClick={() => deleteItem(menuItem)}><LuTrash2 /> {menuItemPending ? "삭제 다시 시도" : "영구 삭제"}</button>
+              </>
+            )}
+          </div>
+        </>
+      )}
+
+      {movingItem && (
+        <>
+          <button className={styles.dialogBackdrop} onClick={() => setMovingItemId(null)} aria-label="이동 창 닫기" />
+          <div className={styles.folderMoveDialog} role="dialog" aria-modal="true" aria-labelledby="move-item-title">
+            <div>
+              <span><LuFolderInput /></span>
+              <div><strong id="move-item-title">폴더로 이동</strong><small>{movingItem.title}</small></div>
+            </div>
+            <label>
+              이동할 위치
+              <select value={moveParentId} onChange={(event) => setMoveParentId(event.target.value)} autoFocus>
+                <option value="">문서 최상위</option>
+                {folderOptions.map((folder) => <option key={folder.id} value={folder.id}>{folder.label}</option>)}
+              </select>
+            </label>
+            <div className={styles.folderMoveActions}>
+              <button onClick={() => setMovingItemId(null)}>취소</button>
+              <button onClick={moveItem} disabled={pendingId === movingItem.id}>이동</button>
+            </div>
+          </div>
+        </>
+      )}
 
       <div className={styles.sidebarBottom}>
         <button className={styles.membersButton} onClick={onMembersOpen}>

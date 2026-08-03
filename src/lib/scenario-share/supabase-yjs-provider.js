@@ -1091,3 +1091,23 @@ export class SupabaseYjsProvider extends ScenarioShareEmitter {
 export function createSupabaseYjsProvider(options) {
   return new SupabaseYjsProvider(options)
 }
+
+/** Permanently remove one deleted document's offline Yjs database. */
+export async function clearScenarioShareLocalDocument(documentId) {
+  if (!documentId || !isBrowserRuntime() || typeof indexedDB === "undefined") {
+    return
+  }
+
+  const { IndexeddbPersistence } = await import("y-indexeddb")
+  const document = new Y.Doc()
+  const persistence = new IndexeddbPersistence(
+    `scenario-share:${documentId}`,
+    document,
+  )
+
+  try {
+    await persistence.clearData()
+  } finally {
+    document.destroy()
+  }
+}

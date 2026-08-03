@@ -4,7 +4,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   LuBookOpen,
-  LuChevronRight,
+  LuFolderPlus,
   LuLogOut,
   LuMenu,
   LuRefreshCw,
@@ -14,6 +14,15 @@ import {
   LuX,
 } from "react-icons/lu";
 import {
+  DOCUMENT_ITEM_TYPE,
+  FOLDER_ITEM_TYPE,
+  countTreeItemTypes,
+  isDocument,
+  isOpenableDocument,
+  resolveDocumentAfterDeletion,
+  resolveSelectedDocumentId,
+} from "@/lib/scenario-share/document-tree.mjs";
+import {
   getSupabaseBrowserClient,
   supabaseEnvironment,
 } from "@/lib/supabase/client";
@@ -21,6 +30,7 @@ import {
   isAllowedLoginEmail,
   normalizeLoginEmail,
 } from "@/lib/scenario-share/auth-access.mjs";
+import { clearScenarioShareLocalDocument } from "@/lib/scenario-share/supabase-yjs-provider";
 import { CollaborativeDocument } from "./CollaborativeDocument";
 import { MembersModal } from "./MembersModal";
 import { WikiSidebar } from "./WikiSidebar";
@@ -155,13 +165,13 @@ export function ScenarioShareApp() {
       const rows = data || [];
       setDocuments(rows);
       setSelectedDocumentId((current) => {
-        if (current && rows.some((document) => document.id === current)) return current;
         const remembered = window.localStorage.getItem(
           `scenario-share:selected:${workspaceId}`,
         );
-        return rows.some((document) => document.id === remembered)
-          ? remembered
-          : rows[0]?.id || null;
+        return resolveSelectedDocumentId(rows, {
+          currentId: current,
+          rememberedId: remembered,
+        });
       });
       return rows;
     },
@@ -250,22 +260,50 @@ export function ScenarioShareApp() {
   useEffect(() => {
     if (!supabase || !membership?.workspace_id) return undefined;
     const workspaceId = membership.workspace_id;
+    const scheduleRefresh = () => {
+      window.clearTimeout(refreshTimerRef.current);
+      refreshTimerRef.current = window.setTimeout(
+        () => fetchDocuments(workspaceId, { quiet: true }),
+        180,
+      );
+    };
     const channel = supabase
       .channel(`scenario-share-documents-${workspaceId}`)
       .on(
         "postgres_changes",
         {
-          event: "*",
+          event: "INSERT",
           schema: "public",
           table: "documents",
           filter: `workspace_id=eq.${workspaceId}`,
         },
-        () => {
-          window.clearTimeout(refreshTimerRef.current);
-          refreshTimerRef.current = window.setTimeout(
-            () => fetchDocuments(workspaceId, { quiet: true }),
-            180,
-          );
+        scheduleRefresh,
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "documents",
+          filter: `workspace_id=eq.${workspaceId}`,
+        },
+        scheduleRefresh,
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "DELETE",
+          schema: "public",
+          table: "documents",
+        },
+        (payload) => {
+          const deletedId = payload?.old?.id;
+          if (deletedId) {
+            window.setTimeout(() => {
+              clearScenarioShareLocalDocument(deletedId).catch(() => null);
+            }, 500);
+          }
+          scheduleRefresh();
         },
       )
       .subscribe();
@@ -277,11 +315,10 @@ export function ScenarioShareApp() {
   }, [fetchDocuments, membership?.workspace_id, supabase]);
 
   useEffect(() => {
-    if (!membership?.workspace_id || !selectedDocumentId) return;
-    window.localStorage.setItem(
-      `scenario-share:selected:${membership.workspace_id}`,
-      selectedDocumentId,
-    );
+    if (!membership?.workspace_id) return;
+    const storageKey = `scenario-share:selected:${membership.workspace_id}`;
+    if (selectedDocumentId) window.localStorage.setItem(storageKey, selectedDocumentId);
+    else window.localStorage.removeItem(storageKey);
   }, [membership?.workspace_id, selectedDocumentId]);
 
   const signIn = async () => {
@@ -311,32 +348,202 @@ export function ScenarioShareApp() {
     }
   };
 
-  const createDocument = async (parentId = null) => {
-    if (!supabase || !membership || !user) return null;
+  const createItem = async ({ parentId = null, itemType = DOCUMENT_ITEM_TYPE } = {}) => {
+    if (!supabase || !membership || !user || membership.role === "viewer") return null;
     const siblingCount = documents.filter(
       (document) => (document.parent_id || null) === (parentId || null),
     ).length;
+    const title = itemType === FOLDER_ITEM_TYPE ? "새 폴더" : "제목 없는 문서";
     const { data, error } = await supabase
       .from("documents")
       .insert({
         workspace_id: membership.workspace_id,
         parent_id: parentId,
-        title: "제목 없는 문서",
+        item_type: itemType,
+        title,
         plain_text: "",
-        slug: createDocumentSlug("제목 없는 문서"),
+        slug: createDocumentSlug(title),
         sort_order: siblingCount,
       })
       .select("*")
       .single();
 
     if (error) {
-      setNotice({ tone: "error", message: `문서를 만들지 못했습니다: ${error.message}` });
+      setNotice({
+        tone: "error",
+        message: `${itemType === FOLDER_ITEM_TYPE ? "폴더" : "문서"}를 만들지 못했습니다: ${error.message}`,
+      });
       return null;
     }
     setDocuments((current) => [...current, data]);
-    setSelectedDocumentId(data.id);
-    setSidebarOpen(false);
+    if (isDocument(data)) {
+      setSelectedDocumentId(data.id);
+      setSidebarOpen(false);
+    }
     return data;
+  };
+
+  const moveItem = async (itemId, parentId = null) => {
+    if (!supabase || !membership || membership.role === "viewer") return false;
+    const siblingCount = documents.filter(
+      (item) => item.id !== itemId && (item.parent_id || null) === (parentId || null),
+    ).length;
+    const { error } = await supabase
+      .from("documents")
+      .update({ parent_id: parentId, sort_order: siblingCount })
+      .eq("id", itemId);
+
+    if (error) {
+      setNotice({ tone: "error", message: `항목을 이동하지 못했습니다: ${error.message}` });
+      return false;
+    }
+
+    setDocuments((current) => current.map((item) => (
+      item.id === itemId
+        ? { ...item, parent_id: parentId, sort_order: siblingCount }
+        : item
+    )));
+    return true;
+  };
+
+  const deleteItem = async (itemId) => {
+    if (!supabase || !membership || membership.role === "viewer") return false;
+
+    const { data: previewData, error: previewError } = await supabase.rpc(
+      "preview_scenario_share_item_deletion",
+      { p_item_id: itemId },
+    );
+    if (previewError) {
+      setNotice({ tone: "error", message: `삭제 대상을 확인하지 못했습니다: ${previewError.message}` });
+      return false;
+    }
+
+    let preview;
+    try {
+      preview = typeof previewData === "string"
+        ? JSON.parse(previewData)
+        : (previewData || {});
+    } catch {
+      setNotice({ tone: "error", message: "삭제 대상을 확인하지 못했습니다. 다시 시도해 주세요." });
+      return false;
+    }
+    const previewItems = Array.isArray(preview.items) ? preview.items : [];
+    const attachments = Array.isArray(preview.attachments) ? preview.attachments : [];
+    const target = previewItems.find((item) => item.id === itemId);
+    const counts = countTreeItemTypes(previewItems, previewItems.map((item) => item.id));
+    const targetLabel = target?.item_type === FOLDER_ITEM_TYPE ? "폴더" : "문서";
+    const details = [
+      counts.folders ? `폴더 ${counts.folders}개` : null,
+      counts.documents ? `문서 ${counts.documents}개` : null,
+      attachments.length ? `첨부 ${attachments.length}개` : null,
+    ].filter(Boolean).join(" · ");
+    const confirmed = window.confirm(
+      `“${target?.title || "제목 없는 항목"}” ${targetLabel}의 영구 삭제${target?.deletion_pending ? "를 계속" : ""}할까요?\n\n${details || "이 항목"}와 문서 내용, 버전, 댓글이 모두 삭제되며 되돌릴 수 없습니다.`,
+    );
+    if (!confirmed) return false;
+
+    const expectedItemIds = previewItems.map((item) => item.id).filter(Boolean);
+    const expectedAttachmentIds = attachments.map((attachment) => attachment.id).filter(Boolean);
+    const { data: preparedData, error: prepareError } = await supabase.rpc(
+      "prepare_scenario_share_item_deletion",
+      {
+        p_item_id: itemId,
+        p_expected_item_ids: expectedItemIds,
+        p_expected_attachment_ids: expectedAttachmentIds,
+      },
+    );
+    if (prepareError) {
+      setNotice({
+        tone: "error",
+        message: `삭제 대상이 변경되어 아무것도 지우지 않았습니다. 다시 확인해 주세요: ${prepareError.message}`,
+      });
+      return false;
+    }
+
+    let prepared;
+    try {
+      prepared = typeof preparedData === "string"
+        ? JSON.parse(preparedData)
+        : (preparedData || {});
+    } catch {
+      setNotice({ tone: "error", message: "삭제 준비 결과를 확인하지 못했습니다. 같은 항목에서 삭제를 다시 시도해 주세요." });
+      return false;
+    }
+
+    const deletionToken = prepared.deletion_token;
+    const preparedAttachments = Array.isArray(prepared.attachments)
+      ? prepared.attachments
+      : [];
+    if (!deletionToken) {
+      setNotice({ tone: "error", message: "삭제 준비 토큰을 받지 못했습니다. 같은 항목에서 삭제를 다시 시도해 주세요." });
+      return false;
+    }
+
+    const preparedItemIds = Array.isArray(prepared.item_ids) && prepared.item_ids.length
+      ? prepared.item_ids
+      : expectedItemIds;
+    const preparedItemIdSet = new Set(preparedItemIds);
+    setDocuments((current) => current.map((item) => (
+      preparedItemIdSet.has(item.id)
+        ? { ...item, deletion_token: deletionToken }
+        : item
+    )));
+    setSelectedDocumentId((current) =>
+      resolveDocumentAfterDeletion(
+        documents,
+        current,
+        preparedItemIds,
+      ),
+    );
+
+    const objectPaths = preparedAttachments
+      .map((attachment) => attachment.object_path)
+      .filter(Boolean);
+    for (let index = 0; index < objectPaths.length; index += 1000) {
+      const { error } = await supabase.storage
+        .from("scenario-share-attachments")
+        .remove(objectPaths.slice(index, index + 1000));
+      if (error) {
+        setNotice({
+          tone: "error",
+          message: `첨부 파일 정리가 중단됐습니다. 항목은 편집되지 않도록 안전하게 잠겨 있으며, “삭제 다시 시도”로 이어서 처리할 수 있습니다: ${error.message}`,
+        });
+        return false;
+      }
+    }
+
+    const { data: deletedData, error: deleteError } = await supabase.rpc(
+      "delete_scenario_share_item",
+      { p_deletion_token: deletionToken },
+    );
+    if (deleteError) {
+      setNotice({
+        tone: "error",
+        message: `삭제 마무리가 중단됐습니다. 항목은 안전하게 잠겨 있으며, “삭제 다시 시도”로 이어서 처리할 수 있습니다: ${deleteError.message}`,
+      });
+      return false;
+    }
+
+    const serverDeletedIds = Array.isArray(deletedData) ? deletedData : [];
+    const deletedIds = serverDeletedIds.length
+      ? serverDeletedIds
+      : previewItems.map((item) => item.id);
+    const deletedIdSet = new Set(deletedIds);
+    setDocuments((current) => current.filter((item) => !deletedIdSet.has(item.id)));
+    setSelectedDocumentId((current) =>
+      resolveDocumentAfterDeletion(documents, current, deletedIds),
+    );
+    setNotice({ tone: "success", message: `${targetLabel}를 영구 삭제했습니다.` });
+
+    const deletedDocumentIds = previewItems
+      .filter((item) => item.item_type !== FOLDER_ITEM_TYPE)
+      .map((item) => item.id);
+    window.setTimeout(() => {
+      Promise.allSettled(
+        deletedDocumentIds.map((documentId) => clearScenarioShareLocalDocument(documentId)),
+      );
+    }, 500);
+    return true;
   };
 
   const patchDocument = useCallback((documentId, patch) => {
@@ -348,8 +555,9 @@ export function ScenarioShareApp() {
   }, []);
 
   const currentDocument = documents.find(
-    (document) => document.id === selectedDocumentId,
+    (document) => document.id === selectedDocumentId && isOpenableDocument(document),
   );
+  const documentCount = documents.filter(isDocument).length;
   const currentProfile = user ? profileFromUser(user) : null;
 
   if (authState === "missing-env") {
@@ -441,8 +649,14 @@ export function ScenarioShareApp() {
         open={sidebarOpen}
         documents={documents}
         selectedDocumentId={selectedDocumentId}
-        onSelect={(id) => { setSelectedDocumentId(id); setSidebarOpen(false); }}
-        onCreate={createDocument}
+        onSelect={(id) => {
+          if (!isOpenableDocument(documents.find((item) => item.id === id))) return;
+          setSelectedDocumentId(id);
+          setSidebarOpen(false);
+        }}
+        onCreate={createItem}
+        onMove={moveItem}
+        onDelete={deleteItem}
         onDocumentsChange={setDocuments}
         onClose={() => setSidebarOpen(false)}
         supabase={supabase}
@@ -478,12 +692,13 @@ export function ScenarioShareApp() {
           />
         ) : (
           <div className={styles.emptyWorkspace}>
-            <div className={styles.emptyIllustration}><LuBookOpen /></div>
-            <h2>첫 번째 문서를 만들어 보세요</h2>
-            <p>세계관, 캐릭터, 에피소드처럼 필요한 주제부터 시작하면 됩니다.</p>
-            <button className={styles.primaryButton} onClick={() => createDocument(null)}>
-              새 문서 만들기 <LuChevronRight />
-            </button>
+            <div className={styles.emptyIllustration}>{documentCount ? <LuBookOpen /> : <LuFolderPlus />}</div>
+            <h2>{documentCount ? "문서를 선택해 주세요" : "문서 탭에서 시작해 보세요"}</h2>
+            <p>
+              {membership.role === "viewer"
+                ? "편집자가 문서를 만들면 이곳에서 함께 볼 수 있습니다."
+                : "문서 탭의 + 버튼 또는 빈 영역 우클릭으로 새 폴더와 문서를 만들 수 있습니다."}
+            </p>
           </div>
         )}
       </section>

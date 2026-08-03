@@ -18,7 +18,6 @@ import { Table, TableCell, TableHeader, TableRow } from "@tiptap/extension-table
 import Placeholder from "@tiptap/extension-placeholder";
 import CharacterCount from "@tiptap/extension-character-count";
 import {
-  LuCheck,
   LuChevronRight,
   LuCircleAlert,
   LuCloud,
@@ -28,6 +27,7 @@ import {
   LuWifiOff,
   LuX,
 } from "react-icons/lu";
+import { isFolder } from "@/lib/scenario-share/document-tree.mjs";
 import { SupabaseYjsProvider } from "@/lib/scenario-share/supabase-yjs-provider";
 import { CommentsPanel } from "./CommentsPanel";
 import { EditorToolbar } from "./EditorToolbar";
@@ -327,7 +327,11 @@ export function CollaborativeDocument({
           {breadcrumbs.map((item, index) => (
             <span key={item.id}>
               {index > 0 && <LuChevronRight />}
-              <button onClick={() => onSelectDocument(item.id)}>{item.title || "제목 없는 문서"}</button>
+              {isFolder(item) ? (
+                <span className={styles.folderBreadcrumb}>{item.title || "새 폴더"}</span>
+              ) : (
+                <button onClick={() => onSelectDocument(item.id)}>{item.title || "제목 없는 문서"}</button>
+              )}
             </span>
           ))}
         </div>
@@ -408,11 +412,6 @@ export function CollaborativeDocument({
                 placeholder="문서 제목"
                 aria-label="문서 제목"
               />
-              <div className={styles.titleMeta}>
-                {readOnly && <span>읽기 전용</span>}
-                {!readOnly && (dirty || providerPending ? <span className={styles.unsavedLabel}>저장되지 않은 변경</span> : <span><LuCheck /> 모든 변경 저장됨</span>)}
-                {remoteCollaborators.length > 0 && <span className={styles.editingLabel}>{remoteCollaborators.map((item) => item.name).join(", ")} 편집 중</span>}
-              </div>
             </div>
             {!synced || !provider ? (
               <div className={styles.editorLoading}>

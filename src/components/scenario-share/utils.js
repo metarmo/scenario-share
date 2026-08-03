@@ -1,3 +1,8 @@
+import {
+  descendantsOf,
+  itemBreadcrumbs,
+} from "@/lib/scenario-share/document-tree.mjs";
+
 export const SCENARIO_SHARE_COLORS = [
   "#635BFF",
   "#0D9488",
@@ -65,39 +70,10 @@ export function formatRelativeTime(dateValue) {
 }
 
 export function documentBreadcrumbs(documents, documentId) {
-  const byId = new Map(documents.map((document) => [document.id, document]));
-  const chain = [];
-  const seen = new Set();
-  let current = byId.get(documentId);
-
-  while (current && !seen.has(current.id)) {
-    seen.add(current.id);
-    chain.unshift(current);
-    current = current.parent_id ? byId.get(current.parent_id) : null;
-  }
-
-  return chain;
+  return itemBreadcrumbs(documents, documentId);
 }
 
-export function descendantsOf(documents, rootId) {
-  const childrenByParent = new Map();
-  for (const document of documents) {
-    const parent = document.parent_id || "root";
-    const siblings = childrenByParent.get(parent) || [];
-    siblings.push(document);
-    childrenByParent.set(parent, siblings);
-  }
-
-  const result = [];
-  const stack = [rootId];
-  while (stack.length) {
-    const id = stack.pop();
-    if (!id || result.includes(id)) continue;
-    result.push(id);
-    for (const child of childrenByParent.get(id) || []) stack.push(child.id);
-  }
-  return result;
-}
+export { descendantsOf };
 
 export function createDocumentSlug(title = "") {
   const ascii = title
