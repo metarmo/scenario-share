@@ -406,7 +406,7 @@
 .sidebarActions {
   display: grid;
   gap: 8px;
-  padding: 7px 12px 14px;
+  padding: 7px 12px 11px;
 }
 
 .searchBox {
@@ -428,29 +428,10 @@
 .searchBox input::placeholder { color: #aaaab1; }
 .searchBox button { display: grid; width: 22px; height: 22px; place-items: center; color: #9799a0; cursor: pointer; border: 0; border-radius: 5px; background: transparent; }
 
-.newDocumentButton {
-  display: flex;
-  height: 38px;
-  padding: 0 11px;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  color: white;
-  font: inherit;
-  font-size: 12px;
-  font-weight: 680;
-  cursor: pointer;
-  border: 0;
-  border-radius: 9px;
-  background: #5f57ec;
-  box-shadow: 0 4px 10px rgba(95, 87, 236, 0.17);
-}
-
-.newDocumentButton:hover { background: #5149df; }
-
 .sidebarSectionHeading {
   display: flex;
-  padding: 4px 19px 8px;
+  min-height: 28px;
+  padding: 3px 12px 5px 19px;
   align-items: center;
   justify-content: space-between;
   color: #9b9da5;
@@ -461,6 +442,22 @@
 }
 
 .sidebarSectionHeading svg { font-size: 12px; }
+
+.treeCreateMenuButton {
+  display: grid;
+  width: 25px;
+  height: 25px;
+  place-items: center;
+  color: #8e9098;
+  font-size: 14px;
+  cursor: pointer;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+}
+
+.treeCreateMenuButton:hover { color: #514ac8; background: #ecebfb; }
+.treeCreateMenuButton:disabled { cursor: wait; opacity: 0.45; }
 
 .documentTree {
   flex: 1;
@@ -485,6 +482,7 @@
 
 .treeRow:hover { background: #efeff2; }
 .treeRowActive { background: #e9e8fb !important; }
+.treeFolderRow .treeTitle { color: #4d4f58; font-weight: 620; }
 
 .treeChevron,
 .treeMore {
@@ -505,28 +503,65 @@
 .treeChevron:disabled svg { width: 12px; color: #9a9ca4; }
 .treeMore { visibility: hidden; font-size: 15px; }
 .treeRow:hover .treeMore,
-.treeRowActive .treeMore { visibility: visible; }
+.treeRowActive .treeMore,
+.treeRow:focus-within .treeMore { visibility: visible; }
 .treeMore:hover { color: #53555d; background: rgba(255, 255, 255, 0.85); }
 
 .treeTitle {
+  display: flex;
   flex: 1;
   min-width: 0;
-  overflow: hidden;
+  align-items: center;
   color: #55575f;
   font: inherit;
   font-size: 12px;
   font-weight: 500;
   line-height: 32px;
   text-align: left;
-  text-overflow: ellipsis;
-  white-space: nowrap;
   cursor: pointer;
   border: 0;
   background: transparent;
 }
 
-.treeTitle span { margin-right: 5px; }
 .treeRowActive .treeTitle { color: #4d46c7; font-weight: 680; }
+
+.treeItemIcon {
+  display: grid;
+  width: 17px;
+  flex: 0 0 17px;
+  margin-right: 4px;
+  place-items: center;
+  color: #999ba4;
+  font-size: 13px;
+}
+
+.treeFolderRow .treeItemIcon { color: #7771cf; font-size: 14px; }
+
+.treeItemLabel {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 5px;
+  overflow: hidden;
+}
+
+.treeItemLabel > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.treeItemLabel small {
+  flex: 0 0 auto;
+  padding: 1px 4px;
+  color: #a34d4d;
+  font-size: 7px;
+  font-weight: 700;
+  line-height: 14px;
+  border-radius: 4px;
+  background: #f8e8e8;
+}
 
 .treeRenameInput {
   width: 100%;
@@ -552,12 +587,10 @@
   background: transparent;
 }
 
-.treeMenu {
-  position: absolute;
+.treeContextMenu {
+  position: fixed;
   z-index: 81;
-  top: 30px;
-  right: 2px;
-  width: 166px;
+  width: 190px;
   padding: 5px;
   border: 1px solid #e0e1e5;
   border-radius: 10px;
@@ -566,7 +599,7 @@
   backdrop-filter: blur(16px);
 }
 
-.treeMenu button {
+.treeContextMenu button {
   display: flex;
   width: 100%;
   height: 32px;
@@ -582,9 +615,97 @@
   background: transparent;
 }
 
-.treeMenu button:hover { background: #f2f2f5; }
-.treeMenu span { display: block; height: 1px; margin: 4px; background: #ececf0; }
-.treeMenu .dangerMenuItem { color: #bf5050; }
+.treeContextMenu button:hover { background: #f2f2f5; }
+.treeContextMenu > span { display: block; height: 1px; margin: 4px; background: #ececf0; }
+.treeContextMenu .dangerMenuItem { color: #bf5050; }
+
+.dialogBackdrop {
+  position: fixed;
+  z-index: 90;
+  inset: 0;
+  cursor: default;
+  border: 0;
+  background: rgba(28, 29, 35, 0.18);
+  backdrop-filter: blur(2px);
+}
+
+.folderMoveDialog {
+  position: fixed;
+  z-index: 91;
+  top: 50%;
+  left: 50%;
+  display: grid;
+  width: min(92vw, 360px);
+  padding: 20px;
+  gap: 18px;
+  border: 1px solid #e0e1e5;
+  border-radius: 15px;
+  background: #fff;
+  box-shadow: 0 24px 70px rgba(28, 29, 35, 0.22);
+  transform: translate(-50%, -50%);
+}
+
+.folderMoveDialog > div:first-child {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+}
+
+.folderMoveDialog > div:first-child > span {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
+  place-items: center;
+  color: #5b54d4;
+  font-size: 17px;
+  border-radius: 10px;
+  background: #eeedff;
+}
+
+.folderMoveDialog > div:first-child > div { display: grid; min-width: 0; gap: 2px; }
+.folderMoveDialog strong { color: #34353c; font-size: 14px; }
+.folderMoveDialog small { overflow: hidden; color: #9698a0; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.folderMoveDialog label { display: grid; gap: 7px; color: #6e7078; font-size: 10px; font-weight: 700; }
+
+.folderMoveDialog select {
+  width: 100%;
+  height: 39px;
+  padding: 0 10px;
+  color: #45474f;
+  font: inherit;
+  font-size: 12px;
+  outline: 0;
+  border: 1px solid #dfe0e5;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.folderMoveDialog select:focus { border-color: #938df0; box-shadow: 0 0 0 3px rgba(99, 91, 255, 0.1); }
+
+.folderMoveActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 7px;
+}
+
+.folderMoveActions button {
+  height: 34px;
+  padding: 0 13px;
+  color: #656770;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 680;
+  cursor: pointer;
+  border: 1px solid #dedfe4;
+  border-radius: 7px;
+  background: #fff;
+}
+
+.folderMoveActions button:last-child { color: #fff; border-color: #635bff; background: #635bff; }
+.folderMoveActions button:hover { background: #f5f5f7; }
+.folderMoveActions button:last-child:hover { background: #5148e5; }
+.folderMoveActions button:disabled { cursor: wait; opacity: 0.5; }
 
 .searchResult {
   display: grid;
@@ -621,7 +742,7 @@
   background: rgba(255, 255, 255, 0.45);
 }
 
-.sidebarEmpty { grid-template-columns: auto 1fr; text-align: left; cursor: pointer; }
+.sidebarEmpty { grid-template-columns: auto 1fr; text-align: left; }
 .sidebarEmpty > svg { font-size: 18px; }
 .sidebarEmpty strong { color: #615ae1; font-weight: 700; }
 
@@ -743,6 +864,7 @@
 .breadcrumbs button { max-width: 160px; padding: 5px 4px; overflow: hidden; color: #74767e; font: inherit; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; border: 0; border-radius: 5px; background: transparent; }
 .breadcrumbs span:last-child button { color: #34363c; font-weight: 670; }
 .breadcrumbs button:hover { background: #f1f1f4; }
+.breadcrumbs .folderBreadcrumb { max-width: 140px; padding: 5px 4px; overflow: hidden; color: #7771a8; font-size: 11px; font-weight: 620; text-overflow: ellipsis; white-space: nowrap; }
 
 .documentHeaderRight {
   display: flex;
@@ -1006,6 +1128,23 @@
   background: #f8f8fa;
 }
 
+.documentStatus {
+  display: flex;
+  height: 31px;
+  padding: 0 7px;
+  align-items: center;
+  gap: 5px;
+  font-size: 9px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.documentStatus svg { flex: 0 0 auto; font-size: 12px; }
+.documentStatusSaved { color: #6d8a78; }
+.documentStatusDirty { color: #a66b25; }
+.documentStatusSaving { color: #625bd7; }
+.documentStatusReadOnly { color: #858790; }
+
 .saveButtonDirty { color: white; border-color: #635bff; background: #635bff; box-shadow: 0 3px 9px rgba(99, 91, 255, 0.2); }
 .saveButton:disabled { cursor: wait; opacity: 0.6; }
 
@@ -1055,21 +1194,6 @@
 .documentTitleArea > input::placeholder { color: #c7c8ce; }
 .documentTitleArea > input:read-only { cursor: default; }
 
-.titleMeta {
-  display: flex;
-  min-height: 22px;
-  margin-top: 10px;
-  align-items: center;
-  gap: 12px;
-  color: #a0a2a9;
-  font-size: 9px;
-}
-
-.titleMeta span { display: flex; align-items: center; gap: 4px; }
-.titleMeta svg { font-size: 11px; }
-.titleMeta .unsavedLabel { color: #b07a38; }
-.titleMeta .editingLabel { color: #5f59cc; }
-
 .editorLoading {
   display: grid;
   min-height: 360px;
@@ -1097,6 +1221,8 @@
 
 .tiptapDocument > *:first-child { margin-top: 0; }
 .tiptapDocument p { margin: 0.65em 0; }
+.tiptapDocument strong { font-weight: 700; }
+.tiptapDocument em { font-style: italic; }
 .tiptapDocument h1,
 .tiptapDocument h2,
 .tiptapDocument h3 { color: #28292e; font-weight: 730; letter-spacing: -0.035em; }
@@ -1350,6 +1476,10 @@
   .connectionStatus span { display: none; }
 }
 
+@media (hover: none) {
+  .treeMore { visibility: visible; }
+}
+
 @media (max-width: 900px) {
   .app { padding-top: 48px; }
 
@@ -1389,6 +1519,7 @@
 
   .sidebarOpen { transform: translateX(0); }
   .sidebarClose { color: #6d6f77; }
+  .treeMore { visibility: visible; }
   .mobileScrim { position: fixed; z-index: 55; inset: 0; display: block; cursor: default; border: 0; background: rgba(25, 26, 31, 0.34); backdrop-filter: blur(2px); }
 
   .documentHeader { flex-basis: 44px; height: 44px; padding: 0 10px; }
@@ -1434,8 +1565,6 @@
   .pageCanvas { width: 100%; min-height: 100%; padding: 38px 23px 80px; border: 0; border-radius: 0; box-shadow: none; }
   .documentTitleArea { margin-bottom: 28px; }
   .documentTitleArea > input { font-size: 30px; }
-  .titleMeta { gap: 7px; }
-  .titleMeta .editingLabel { display: none; }
   .tiptapDocument { font-size: 14px; line-height: 1.82; }
   .editorFooter { padding: 0 15px; background: white; }
   .editorFooter span:last-child { display: none; }
@@ -1459,8 +1588,7 @@
   .sidePanel,
   .editorFooter,
   .followBanner,
-  .editorAlert,
-  .titleMeta {
+  .editorAlert {
     display: none !important;
   }
 
