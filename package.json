@@ -1,0 +1,60 @@
+{
+  "name": "scenario-share",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "homepage": "https://www.metarmo.com/scenario-share",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/metarmo/scenario-share.git"
+  },
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint .",
+    "test": "node --test src/lib/scenario-share/*.test.mjs",
+    "test:watch": "node --test --watch src/lib/scenario-share/*.test.mjs",
+    "check": "npm run lint && npm test && npm run build"
+  },
+  "engines": {
+    "node": ">=22.22.2"
+  },
+  "overrides": {
+    "postcss": "8.5.25",
+    "sharp": "0.35.3"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "2.111.0",
+    "@tiptap/extension-character-count": "3.29.2",
+    "@tiptap/extension-collaboration": "3.29.2",
+    "@tiptap/extension-collaboration-caret": "3.29.2",
+    "@tiptap/extension-highlight": "3.29.2",
+    "@tiptap/extension-image": "3.29.2",
+    "@tiptap/extension-link": "3.29.2",
+    "@tiptap/extension-placeholder": "3.29.2",
+    "@tiptap/extension-table": "3.29.2",
+    "@tiptap/extension-task-item": "3.29.2",
+    "@tiptap/extension-task-list": "3.29.2",
+    "@tiptap/extension-text-align": "3.29.2",
+    "@tiptap/extension-text-style": "3.29.2",
+    "@tiptap/extension-underline": "3.29.2",
+    "@tiptap/pm": "3.29.2",
+    "@tiptap/react": "3.29.2",
+    "@tiptap/starter-kit": "3.29.2",
+    "@tiptap/y-tiptap": "3.0.8",
+    "@vercel/analytics": "1.5.0",
+    "next": "16.2.12",
+    "react": "19.1.0",
+    "react-dom": "19.1.0",
+    "react-icons": "5.5.0",
+    "sharp": "0.35.3",
+    "y-indexeddb": "9.0.12",
+    "y-protocols": "1.0.7",
+    "yjs": "13.6.31"
+  },
+  "devDependencies": {
+    "eslint": "9.39.5",
+    "eslint-config-next": "16.2.12"
+  }
+}
