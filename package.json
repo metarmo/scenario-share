@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "homepage": "https://www.metarmo.com/scenario-share",
+  "homepage": "https://scenario-share.vercel.app",
   "repository": {
     "type": "git",
     "url": "https://github.com/metarmo/scenario-share.git"

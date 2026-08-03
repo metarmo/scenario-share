@@ -4,6 +4,9 @@ import test from "node:test";
 import {
   ACCESS_COOKIE_NAME,
   ACCESS_SESSION_TTL_SECONDS,
+  ACCESS_UNLOCK_API_PATH,
+  ACCESS_UNLOCK_PATH,
+  SCENARIO_SHARE_ROOT_PATH,
   accessCookieOptions,
   createAccessToken,
   getAccessGateConfig,
@@ -68,12 +71,18 @@ test("access token rejects expiry, tampering, wrong secrets, and malformed data"
   assert.equal(verifyAccessToken("not-a-token", SIGNING_SECRET, { now: NOW }), false);
 });
 
-test("access cookie is scoped to ScenarioShare and hardened", () => {
+test("independent deployment paths are rooted at the Vercel origin", () => {
+  assert.equal(SCENARIO_SHARE_ROOT_PATH, "/");
+  assert.equal(ACCESS_UNLOCK_PATH, "/unlock");
+  assert.equal(ACCESS_UNLOCK_API_PATH, "/api/access/unlock");
+});
+
+test("access cookie is scoped to the independent app and hardened", () => {
   const options = accessCookieOptions({ production: true });
   assert.equal(ACCESS_COOKIE_NAME, "scenario_share_gate");
   assert.equal(options.httpOnly, true);
   assert.equal(options.secure, true);
   assert.equal(options.sameSite, "lax");
-  assert.equal(options.path, "/scenario-share");
+  assert.equal(options.path, "/");
   assert.equal(options.maxAge, ACCESS_SESSION_TTL_SECONDS);
 });

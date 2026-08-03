@@ -10,8 +10,8 @@ test("concurrent edits converge regardless of delivery order", () => {
   const first = new Y.Doc();
   const second = new Y.Doc();
 
-  first.getText("body").insert(0, "METARMO ");
-  second.getText("body").insert(0, "PLAZMA ");
+  first.getText("body").insert(0, "SCENARIO ");
+  second.getText("body").insert(0, "SHARE ");
 
   const firstUpdate = Y.encodeStateAsUpdate(first);
   const secondUpdate = Y.encodeStateAsUpdate(second);

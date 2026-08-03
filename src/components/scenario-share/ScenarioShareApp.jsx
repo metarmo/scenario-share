@@ -257,7 +257,7 @@ export function ScenarioShareApp() {
     const { error } = await supabase.auth.signInWithOAuth({
       provider: "google",
       options: {
-        redirectTo: `${window.location.origin}/scenario-share`,
+        redirectTo: window.location.origin,
         queryParams: { prompt: "select_account" },
       },
     });
@@ -274,7 +274,7 @@ export function ScenarioShareApp() {
 
     const form = window.document.createElement("form");
     form.method = "post";
-    form.action = "/scenario-share/api/access/logout";
+    form.action = "/api/access/logout";
     form.hidden = true;
     window.document.body.appendChild(form);
     form.submit();
@@ -325,7 +325,7 @@ export function ScenarioShareApp() {
     return (
       <CenteredShell>
         <div className={styles.stateIconError}><LuSettings /></div>
-        <div className={styles.brandPill}>METARMO · ScenarioShare</div>
+        <div className={styles.brandPill}>ScenarioShare</div>
         <h1>Supabase 연결이 필요합니다</h1>
         <p className={styles.stateDescription}>
           아래 환경 변수를 프로젝트의 <code>.env.local</code>에 추가한 뒤 개발 서버를 다시 시작해 주세요.
@@ -354,7 +354,7 @@ export function ScenarioShareApp() {
           <GoogleMark />
           {busy ? "Google로 이동하는 중…" : "Google 계정으로 계속"}
         </button>
-        <p className={styles.loginFinePrint}>Google 인증 후 초대된 METARMO와 Plazma 구성원만 편집 공간에 입장할 수 있습니다.</p>
+        <p className={styles.loginFinePrint}>Google 인증 후 초대된 구성원만 편집 공간에 입장할 수 있습니다.</p>
         {notice && <InlineNotice notice={notice} />}
       </CenteredShell>
     );

@@ -3,7 +3,6 @@ import { NextResponse } from "next/server";
 import {
   ACCESS_COOKIE_NAME,
   ACCESS_UNLOCK_PATH,
-  SCENARIO_SHARE_BASE_PATH,
   getAccessGateConfig,
   verifyAccessToken,
 } from "./lib/scenario-share/access-gate.mjs";
@@ -15,31 +14,27 @@ function applyPrivateHeaders(response) {
   return response;
 }
 
-function isPublicScenarioSharePath(pathname) {
+function isAccessGatePath(pathname) {
   return (
     pathname === "/unlock" ||
     pathname === "/api/access/unlock" ||
-    pathname === "/api/access/logout" ||
-    pathname === "/robots.txt" ||
-    pathname.startsWith("/_next/")
+    pathname === "/api/access/logout"
   );
+}
+
+function isPublicStaticPath(pathname) {
+  return pathname === "/robots.txt" || pathname.startsWith("/_next/");
 }
 
 export function proxy(request) {
   const { pathname } = request.nextUrl;
-  const configuredBasePath = request.nextUrl.basePath;
-  const isScenarioSharePath =
-    configuredBasePath === SCENARIO_SHARE_BASE_PATH ||
-    pathname === SCENARIO_SHARE_BASE_PATH ||
-    pathname.startsWith(`${SCENARIO_SHARE_BASE_PATH}/`);
-  const appPath = pathname === SCENARIO_SHARE_BASE_PATH
-    ? "/"
-    : pathname.startsWith(`${SCENARIO_SHARE_BASE_PATH}/`)
-      ? pathname.slice(SCENARIO_SHARE_BASE_PATH.length)
-      : pathname;
 
-  if (!isScenarioSharePath || isPublicScenarioSharePath(appPath)) {
+  if (isPublicStaticPath(pathname)) {
     return NextResponse.next();
+  }
+
+  if (isAccessGatePath(pathname)) {
+    return applyPrivateHeaders(NextResponse.next());
   }
 
   const config = getAccessGateConfig();
@@ -51,7 +46,7 @@ export function proxy(request) {
     return applyPrivateHeaders(NextResponse.next());
   }
 
-  if (appPath.startsWith("/api/")) {
+  if (pathname.startsWith("/api/")) {
     const response = NextResponse.json(
       { error: "ScenarioShare access password is required" },
       { status: 401 },

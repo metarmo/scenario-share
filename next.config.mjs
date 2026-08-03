@@ -1,6 +1,5 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  basePath: "/scenario-share",
   async headers() {
     const privateHeaders = [
       {

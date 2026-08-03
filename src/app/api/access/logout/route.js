@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import {
   ACCESS_COOKIE_NAME,
   ACCESS_UNLOCK_PATH,
-  SCENARIO_SHARE_BASE_PATH,
+  SCENARIO_SHARE_ROOT_PATH,
 } from "@/lib/scenario-share/access-gate.mjs";
 
 export const dynamic = "force-dynamic";
@@ -34,7 +34,7 @@ export async function POST(request) {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
     sameSite: "lax",
-    path: SCENARIO_SHARE_BASE_PATH,
+    path: SCENARIO_SHARE_ROOT_PATH,
     maxAge: 0,
     expires: new Date(0),
   });

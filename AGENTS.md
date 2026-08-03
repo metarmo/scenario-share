@@ -2,17 +2,17 @@
 
 ## Scope
 
-This repository contains only ScenarioShare, the private realtime wiki and collaborative editor used by METARMO and Plazma. Do not add METARMO company-site pages or shared company-site UI here.
+This repository contains only ScenarioShare, an independent private realtime wiki and collaborative editor. It is not part of the METARMO company site and must remain independently deployed and branded.
 
 ## Current architecture
 
-- Next.js 16 App Router with `basePath: "/scenario-share"`; the app is served at `/scenario-share`.
+- Next.js 16 App Router served from the deployment root.
 - Tiptap + Yjs for rich-text CRDT collaboration.
 - Supabase Auth, Postgres, Storage, and private Realtime channels.
 - IndexedDB preserves offline edits; Postgres snapshots and an append-only update log restore sessions.
 - Workspace membership and RLS protect documents, comments, versions, attachments, and Realtime messages.
 - Supabase project ref: `hxjlmqdoqsnsmunkrtuk`.
-- Intended public URL: `https://www.metarmo.com/scenario-share`.
+- Intended public URL: `https://scenario-share.vercel.app`.
 
 ## Important external blocker
 
@@ -32,5 +32,5 @@ Node.js 22.22.2 or newer is required. Browser-safe Supabase values belong in `NE
 
 - Preserve Yjs convergence, offline recovery, membership checks, private-channel authorization, and RLS guarantees.
 - Add database changes as new files under `supabase/migrations`; do not rewrite migrations that may already be applied.
-- Keep the `/scenario-share` base path working unless deployment routing is intentionally migrated in the same change.
+- Keep the app on its independent root URL; do not add company-domain rewrites or shared company-site UI.
 - Run lint, unit tests, and a production build before publishing.

@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import {
   ACCESS_COOKIE_NAME,
   ACCESS_UNLOCK_PATH,
-  SCENARIO_SHARE_BASE_PATH,
+  SCENARIO_SHARE_ROOT_PATH,
   accessCookieOptions,
   createAccessToken,
   getAccessGateConfig,
@@ -151,7 +151,7 @@ export async function POST(request) {
 
   attempts.delete(key);
   const response = noStore(
-    NextResponse.redirect(new URL(SCENARIO_SHARE_BASE_PATH, request.url), 303),
+    NextResponse.redirect(new URL(SCENARIO_SHARE_ROOT_PATH, request.url), 303),
   );
   response.cookies.set({
     name: ACCESS_COOKIE_NAME,
