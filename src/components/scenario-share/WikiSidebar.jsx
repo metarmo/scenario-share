@@ -189,7 +189,7 @@ export function WikiSidebar({
   return (
     <aside className={`${styles.sidebar} ${open ? styles.sidebarOpen : ""}`}>
       <div className={styles.sidebarHeader}>
-        <div className={styles.productLogo}><span>SS</span><div><strong>ScenarioShare</strong><small>METARMO × PLAZMA</small></div></div>
+        <div className={styles.productLogo}><span>SS</span><div><strong>ScenarioShare</strong><small>PRIVATE COLLABORATION</small></div></div>
         <button className={styles.sidebarClose} onClick={onClose} aria-label="사이드바 닫기"><LuPanelLeftClose /></button>
       </div>
 

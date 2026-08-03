@@ -1,8 +1,8 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 
-export const SCENARIO_SHARE_BASE_PATH = "/scenario-share";
-export const ACCESS_UNLOCK_PATH = `${SCENARIO_SHARE_BASE_PATH}/unlock`;
-export const ACCESS_UNLOCK_API_PATH = `${SCENARIO_SHARE_BASE_PATH}/api/access/unlock`;
+export const SCENARIO_SHARE_ROOT_PATH = "/";
+export const ACCESS_UNLOCK_PATH = "/unlock";
+export const ACCESS_UNLOCK_API_PATH = "/api/access/unlock";
 export const ACCESS_COOKIE_NAME = "scenario_share_gate";
 export const ACCESS_SESSION_TTL_SECONDS = 60 * 60 * 12;
 
@@ -109,7 +109,7 @@ export function accessCookieOptions({ production = process.env.NODE_ENV === "pro
     httpOnly: true,
     secure: production,
     sameSite: "lax",
-    path: SCENARIO_SHARE_BASE_PATH,
+    path: SCENARIO_SHARE_ROOT_PATH,
     maxAge: ACCESS_SESSION_TTL_SECONDS,
     priority: "high",
   };

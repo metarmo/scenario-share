@@ -1,6 +1,6 @@
 # ScenarioShare
 
-ScenarioShare is METARMO × Plazma's private realtime wiki and collaborative scenario editor. It is maintained independently from `metarmo-company-site`.
+ScenarioShare is an independent private realtime wiki and collaborative scenario editor. It is deployed as its own Vercel project and is not routed through a company website.
 
 ## Local development
 
@@ -12,7 +12,7 @@ cp .env.example .env.local
 npm run dev
 ```
 
-Open <http://localhost:3000/scenario-share>. The Next.js app uses `/scenario-share` as its base path so production HTML and `/_next` assets can be routed together from the company domain.
+Open <http://localhost:3000>. The production app is served from the root of its dedicated Vercel domain.
 
 Only browser-safe Supabase connection values belong in `.env.local`:
 
@@ -60,9 +60,9 @@ The OAuth client must use this callback URI:
 https://hxjlmqdoqsnsmunkrtuk.supabase.co/auth/v1/callback
 ```
 
-Add each actual app host as an Authorized JavaScript origin. In Supabase Auth URL Configuration, keep `https://www.metarmo.com/scenario-share` as the intended Site URL and allow the local, production, and approved preview `/scenario-share` URLs.
+Add each actual app host as an Authorized JavaScript origin. In Supabase Auth URL Configuration, use `https://scenario-share.vercel.app` as the intended Site URL and allow the exact local and production root URLs. Add approved Vercel preview URLs separately when previews need Google sign-in.
 
-The first `@metarmo.com` Google user claims the workspace. Every later user must be invited by email before signing in. Before production, disable public Realtime channel access; the client uses only private channels whose authorization is enforced through `realtime.messages` RLS.
+The initial owner uses a two-step bootstrap: sign in with the intended Google account once so Supabase creates the Auth user, then have a trusted Supabase administrator insert a one-time `owner` invitation using that user's UUID as `invited_by`. The user can then choose **다시 확인** to claim ownership. Every later user must also be invited by email before signing in. This prevents an arbitrary Google user from bypassing the shared-link gate and claiming ownership through the public Supabase API. Before production, disable public Realtime channel access; the client uses only private channels whose authorization is enforced through `realtime.messages` RLS.
 
 ## Collaboration model
 
@@ -75,7 +75,7 @@ The first `@metarmo.com` Google user claims the workspace. Every later user must
 
 ## Access flow
 
-1. The public `/scenario-share` URL redirects visitors without a valid gate
+1. The public root URL redirects visitors without a valid gate
    cookie to the password screen.
 2. A correct server-validated password unlocks Google sign-in for 12 hours.
 3. Supabase Google Auth supplies the stable user UUID used by Yjs cursors,
