@@ -102,7 +102,7 @@ export function countTreeItemTypes(items, itemIds) {
 export function movableFolderOptions(items, movingItemId) {
   const excludedIds = new Set(descendantsOf(items, movingItemId));
   return items
-    .filter((item) => isFolder(item) && !excludedIds.has(item.id))
+    .filter((item) => isFolder(item) && !item.deletion_token && !excludedIds.has(item.id))
     .map((folder) => ({
       id: folder.id,
       label: itemBreadcrumbs(items, folder.id)
@@ -110,4 +110,31 @@ export function movableFolderOptions(items, movingItemId) {
         .join(" / "),
     }))
     .sort((a, b) => a.label.localeCompare(b.label, "ko"));
+}
+
+export function movableParentOptions(items, movingItemId) {
+  const excludedIds = new Set(descendantsOf(items, movingItemId));
+  return items
+    .filter((item) => !item.deletion_token && !excludedIds.has(item.id))
+    .map((item) => ({
+      id: item.id,
+      itemType: isFolder(item) ? FOLDER_ITEM_TYPE : DOCUMENT_ITEM_TYPE,
+      label: itemBreadcrumbs(items, item.id)
+        .map((ancestor) => ancestor.title || (isFolder(ancestor) ? "새 폴더" : "제목 없는 문서"))
+        .join(" / "),
+    }))
+    .sort((a, b) => a.label.localeCompare(b.label, "ko"));
+}
+
+export function canMoveItem(items, movingItemId, parentId = null) {
+  const movingItem = items.find((item) => item.id === movingItemId);
+  if (!movingItem || movingItem.deletion_token) return false;
+
+  const normalizedParentId = parentId || null;
+  if ((movingItem.parent_id || null) === normalizedParentId) return false;
+  if (!normalizedParentId) return true;
+
+  const parent = items.find((item) => item.id === normalizedParentId);
+  if (!parent || parent.deletion_token) return false;
+  return !descendantsOf(items, movingItemId).includes(normalizedParentId);
 }

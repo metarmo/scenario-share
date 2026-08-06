@@ -465,8 +465,10 @@
   padding: 0 8px 18px;
   overflow-x: visible;
   overflow-y: auto;
+  transition: background-color 140ms ease;
 }
 
+.documentTreeDropTarget { background: rgba(99, 91, 255, 0.025); }
 .treeBranch { position: relative; }
 
 .treeRow {
@@ -478,10 +480,26 @@
   padding: 0 4px 0 calc(5px + var(--indent));
   align-items: center;
   border-radius: 7px;
+  transition: margin 140ms ease, opacity 140ms ease, background-color 140ms ease, box-shadow 140ms ease;
 }
 
 .treeRow:hover { background: #efeff2; }
 .treeRowActive { background: #e9e8fb !important; }
+.treeRowDragging { opacity: 0.38; }
+.treeRowDropTarget {
+  background: #e8e6ff !important;
+  box-shadow: inset 0 0 0 1px #8a83ed, 0 3px 10px rgba(79, 70, 199, 0.1);
+}
+.treeRowDropTarget::after {
+  position: absolute;
+  right: 8px;
+  bottom: -3px;
+  left: calc(29px + var(--indent));
+  height: 2px;
+  content: "";
+  border-radius: 2px;
+  background: #7169e4;
+}
 .treeFolderRow .treeTitle { color: #4d4f58; font-weight: 620; }
 
 .treeChevron,
@@ -502,6 +520,21 @@
 .treeChevron:disabled { cursor: default; }
 .treeChevron:disabled svg { width: 12px; color: #9a9ca4; }
 .treeMore { visibility: hidden; font-size: 15px; }
+.treeDragHandle {
+  display: grid;
+  width: 16px;
+  height: 26px;
+  flex: 0 0 16px;
+  visibility: hidden;
+  place-items: center;
+  color: #aaa7c4;
+  font-size: 13px;
+  cursor: grab;
+}
+.treeDragHandle:active { cursor: grabbing; }
+.treeRow:hover .treeDragHandle,
+.treeRow:focus-within .treeDragHandle,
+.treeRowDragging .treeDragHandle { visibility: visible; }
 .treeRow:hover .treeMore,
 .treeRowActive .treeMore,
 .treeRow:focus-within .treeMore { visibility: visible; }
@@ -561,6 +594,53 @@
   line-height: 14px;
   border-radius: 4px;
   background: #f8e8e8;
+}
+
+.treeDropPreview {
+  --indent: calc(var(--tree-depth) * 15px);
+  display: flex;
+  min-height: 40px;
+  margin: 4px 4px 5px calc(5px + var(--indent));
+  padding: 6px 8px;
+  align-items: center;
+  gap: 7px;
+  color: #625bd3;
+  cursor: grabbing;
+  border: 1px dashed #948ef0;
+  border-radius: 8px;
+  background: linear-gradient(90deg, #f0efff, #f8f7ff);
+  box-shadow: 0 4px 12px rgba(79, 70, 199, 0.08);
+  animation: treeDropPreviewIn 140ms ease-out;
+}
+
+.treeDropPreviewGuide {
+  display: grid;
+  width: 16px;
+  flex: 0 0 16px;
+  place-items: center;
+  color: #746de0;
+  font-size: 13px;
+}
+
+.treeDropPreviewIcon {
+  display: grid;
+  width: 20px;
+  height: 20px;
+  flex: 0 0 20px;
+  place-items: center;
+  font-size: 12px;
+  border-radius: 5px;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(65, 57, 170, 0.12);
+}
+
+.treeDropPreview > span:last-child { display: grid; min-width: 0; gap: 1px; }
+.treeDropPreview strong { overflow: hidden; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.treeDropPreview small { overflow: hidden; color: #837ec7; font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
+
+@keyframes treeDropPreviewIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 .treeRenameInput {

@@ -69,10 +69,11 @@ Before production, disable public Realtime channel access; the client uses only 
 
 ## Collaboration model
 
-- Tiptap/ProseMirror + Yjs handle concurrent editing and undo/redo.
+- Tiptap/ProseMirror + Yjs handle concurrent body editing and undo/redo; the
+  document title is a shared Y.Text in the same Y.Doc so title edits converge too.
 - Supabase private Realtime Broadcast sends Yjs updates and Awareness cursors.
 - Presence is used only for the low-frequency participant list.
-- IndexedDB keeps offline changes, while an append-only Postgres update log and full snapshots restore state after reconnecting.
+- IndexedDB makes cached documents available immediately. Postgres accepts append-only Yjs updates, while private canonical snapshots atomically compact only updates already incorporated into a verified state.
 - Manual saves record a full Yjs snapshot and author; each document keeps its latest 30 versions.
 - Public-schema tables, Storage objects, and Realtime channels are protected by workspace-membership RLS.
 
