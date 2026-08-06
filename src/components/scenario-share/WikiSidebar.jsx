@@ -6,6 +6,7 @@ import {
   LuBookOpen,
   LuChevronDown,
   LuChevronRight,
+  LuCornerDownRight,
   LuEllipsis,
   LuFilePlus2,
   LuFileText,
@@ -13,6 +14,7 @@ import {
   LuFolderInput,
   LuFolderOpen,
   LuFolderPlus,
+  LuGripVertical,
   LuLogOut,
   LuPanelLeftClose,
   LuPencil,
@@ -24,15 +26,17 @@ import {
 import {
   DOCUMENT_ITEM_TYPE,
   FOLDER_ITEM_TYPE,
+  canMoveItem,
   isDocument,
   isFolder,
-  movableFolderOptions,
+  movableParentOptions,
 } from "@/lib/scenario-share/document-tree.mjs";
 import { initials, profileFromUser } from "./utils";
 import styles from "./ScenarioShare.module.css";
 
 const MENU_WIDTH = 190;
 const MENU_HEIGHT = 270;
+const ROOT_DROP_TARGET = "root";
 
 export function WikiSidebar({
   open,
@@ -42,9 +46,8 @@ export function WikiSidebar({
   onCreate,
   onMove,
   onDelete,
-  onDocumentsChange,
+  onRename,
   onClose,
-  supabase,
   user,
   membership,
   members,
@@ -59,8 +62,11 @@ export function WikiSidebar({
   const [pendingId, setPendingId] = useState(null);
   const [movingItemId, setMovingItemId] = useState(null);
   const [moveParentId, setMoveParentId] = useState("");
+  const [draggingItemId, setDraggingItemId] = useState(null);
+  const [dropTargetId, setDropTargetId] = useState(null);
   const contextMenuRef = useRef(null);
   const contextMenuTriggerRef = useRef(null);
+  const expandDropTimerRef = useRef(null);
   const profile = profileFromUser(user);
   const canEdit = membership.role !== "viewer";
 
@@ -101,10 +107,23 @@ export function WikiSidebar({
   }, [documents, search]);
 
   const movingItem = documents.find((item) => item.id === movingItemId) || null;
-  const folderOptions = useMemo(
-    () => movingItemId ? movableFolderOptions(documents, movingItemId) : [],
+  const parentOptions = useMemo(
+    () => movingItemId ? movableParentOptions(documents, movingItemId) : [],
     [documents, movingItemId],
   );
+  const draggingItem = documents.find((item) => item.id === draggingItemId) || null;
+
+  useEffect(() => {
+    window.clearTimeout(expandDropTimerRef.current);
+    if (!dropTargetId || dropTargetId === ROOT_DROP_TARGET) return undefined;
+    const hasChildren = (childrenByParent.get(dropTargetId) || []).length > 0;
+    if (!hasChildren || expanded.has(dropTargetId)) return undefined;
+
+    expandDropTimerRef.current = window.setTimeout(() => {
+      setExpanded((current) => new Set([...current, dropTargetId]));
+    }, 650);
+    return () => window.clearTimeout(expandDropTimerRef.current);
+  }, [childrenByParent, dropTargetId, expanded]);
 
   const toggleExpanded = (itemId) => {
     setExpanded((current) => {
@@ -187,27 +206,14 @@ export function WikiSidebar({
     setEditingId(null);
     if (title === item.title) return;
     setPendingId(item.id);
-    const { error } = await supabase
-      .from("documents")
-      .update({ title })
-      .eq("id", item.id);
+    await onRename(item, title);
     setPendingId(null);
-    if (!error) {
-      onDocumentsChange((current) =>
-        current.map((currentItem) => currentItem.id === item.id
-          ? { ...currentItem, title }
-          : currentItem),
-      );
-    }
   };
 
   const openMoveDialog = (item) => {
     setContextMenu(null);
     setMovingItemId(item.id);
-    const parentIsFolder = documents.some(
-      (candidate) => candidate.id === item.parent_id && isFolder(candidate),
-    );
-    setMoveParentId(parentIsFolder ? item.parent_id : "");
+    setMoveParentId(item.parent_id || "");
   };
 
   const moveItem = async () => {
@@ -228,6 +234,76 @@ export function WikiSidebar({
     setPendingId(null);
   };
 
+  const clearDragState = () => {
+    window.clearTimeout(expandDropTimerRef.current);
+    setDraggingItemId(null);
+    setDropTargetId(null);
+  };
+
+  const startDragging = (event, item) => {
+    if (!canEdit || item.deletion_token || editingId === item.id) {
+      event.preventDefault();
+      return;
+    }
+    setDraggingItemId(item.id);
+    setDropTargetId(null);
+    setContextMenu(null);
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("application/x-scenario-share-item", item.id);
+    event.dataTransfer.setData("text/plain", item.id);
+  };
+
+  const previewDrop = (event, parentId) => {
+    event.stopPropagation();
+    if (!draggingItemId || !canMoveItem(documents, draggingItemId, parentId)) {
+      event.dataTransfer.dropEffect = "none";
+      setDropTargetId(null);
+      return;
+    }
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    setDropTargetId(parentId || ROOT_DROP_TARGET);
+  };
+
+  const dropItem = async (event, parentId) => {
+    const itemId = draggingItemId
+      || event.dataTransfer.getData("application/x-scenario-share-item");
+    event.preventDefault();
+    event.stopPropagation();
+    if (!itemId || !canMoveItem(documents, itemId, parentId)) {
+      clearDragState();
+      return;
+    }
+
+    setPendingId(itemId);
+    const moved = await onMove(itemId, parentId);
+    setPendingId(null);
+    if (moved && parentId) {
+      setExpanded((current) => new Set([...current, parentId]));
+    }
+    clearDragState();
+  };
+
+  const dropPreview = (parentItem, depth) => draggingItem && (
+    <div
+      className={styles.treeDropPreview}
+      style={{ "--tree-depth": depth }}
+      role="status"
+      aria-live="polite"
+      onDragOver={(event) => previewDrop(event, parentItem?.id || null)}
+      onDrop={(event) => dropItem(event, parentItem?.id || null)}
+    >
+      <span className={styles.treeDropPreviewGuide}><LuCornerDownRight /></span>
+      <span className={styles.treeDropPreviewIcon}>
+        {isFolder(draggingItem) ? <LuFolder /> : <LuFileText />}
+      </span>
+      <span>
+        <strong>{draggingItem.title || (isFolder(draggingItem) ? "새 폴더" : "제목 없는 문서")}</strong>
+        <small>{parentItem ? `“${parentItem.title}” 하위에 들어갑니다` : "문서 최상위에 들어갑니다"}</small>
+      </span>
+    </div>
+  );
+
   const renderTree = (parentId = null, depth = 0) => {
     const children = childrenByParent.get(parentId || "root") || [];
     return children.map((item) => {
@@ -238,9 +314,14 @@ export function WikiSidebar({
       return (
         <div key={item.id} className={styles.treeBranch}>
           <div
-            className={`${styles.treeRow} ${selectedDocumentId === item.id ? styles.treeRowActive : ""} ${folder ? styles.treeFolderRow : ""}`}
+            className={`${styles.treeRow} ${selectedDocumentId === item.id ? styles.treeRowActive : ""} ${folder ? styles.treeFolderRow : ""} ${draggingItemId === item.id ? styles.treeRowDragging : ""} ${dropTargetId === item.id ? styles.treeRowDropTarget : ""}`}
             style={{ "--tree-depth": depth }}
             onContextMenu={(event) => openItemMenu(event, item)}
+            draggable={canEdit && !deletionPending && editingId !== item.id}
+            onDragStart={(event) => startDragging(event, item)}
+            onDragEnd={clearDragState}
+            onDragOver={(event) => previewDrop(event, item.id)}
+            onDrop={(event) => dropItem(event, item.id)}
           >
             <button
               className={styles.treeChevron}
@@ -281,6 +362,11 @@ export function WikiSidebar({
               </button>
             )}
             {canEdit && (
+              <span className={styles.treeDragHandle} aria-hidden="true" title="드래그해서 이동">
+                <LuGripVertical />
+              </span>
+            )}
+            {canEdit && (
               <button
                 className={styles.treeMore}
                 onClick={(event) => openItemMenuFromButton(event, item)}
@@ -291,6 +377,7 @@ export function WikiSidebar({
               </button>
             )}
           </div>
+          {dropTargetId === item.id && dropPreview(item, depth + 1)}
           {hasChildren && isExpanded && renderTree(item.id, depth + 1)}
         </div>
       );
@@ -338,9 +425,14 @@ export function WikiSidebar({
       </div>
 
       <nav
-        className={styles.documentTree}
+        className={`${styles.documentTree} ${dropTargetId === ROOT_DROP_TARGET ? styles.documentTreeDropTarget : ""}`}
         aria-label="위키 문서"
         onContextMenu={openRootMenu}
+        onDragOver={(event) => previewDrop(event, null)}
+        onDrop={(event) => dropItem(event, null)}
+        onDragLeave={(event) => {
+          if (!event.currentTarget.contains(event.relatedTarget)) setDropTargetId(null);
+        }}
       >
         {searchResults ? (
           searchResults.length ? searchResults.map((document) => (
@@ -360,6 +452,7 @@ export function WikiSidebar({
             <span>{canEdit ? <>+ 버튼 또는 이 영역을 우클릭해<br /><strong>폴더 또는 문서 만들기</strong></> : "아직 문서가 없습니다"}</span>
           </div>
         )}
+        {!searchResults && dropTargetId === ROOT_DROP_TARGET && dropPreview(null, 0)}
       </nav>
 
       {contextMenu && (
@@ -388,7 +481,7 @@ export function WikiSidebar({
               <>
                 {!menuItemPending && <span />}
                 {!menuItemPending && <button role="menuitem" onClick={() => startRename(menuItem)}><LuPencil /> 이름 바꾸기</button>}
-                {!menuItemPending && <button role="menuitem" onClick={() => openMoveDialog(menuItem)}><LuFolderInput /> 폴더로 이동</button>}
+                {!menuItemPending && <button role="menuitem" onClick={() => openMoveDialog(menuItem)}><LuFolderInput /> 위치 이동</button>}
                 <span />
                 <button role="menuitem" className={styles.dangerMenuItem} onClick={() => deleteItem(menuItem)}><LuTrash2 /> {menuItemPending ? "삭제 다시 시도" : "영구 삭제"}</button>
               </>
@@ -403,18 +496,25 @@ export function WikiSidebar({
           <div className={styles.folderMoveDialog} role="dialog" aria-modal="true" aria-labelledby="move-item-title">
             <div>
               <span><LuFolderInput /></span>
-              <div><strong id="move-item-title">폴더로 이동</strong><small>{movingItem.title}</small></div>
+              <div><strong id="move-item-title">위치 이동</strong><small>{movingItem.title}</small></div>
             </div>
             <label>
               이동할 위치
               <select value={moveParentId} onChange={(event) => setMoveParentId(event.target.value)} autoFocus>
                 <option value="">문서 최상위</option>
-                {folderOptions.map((folder) => <option key={folder.id} value={folder.id}>{folder.label}</option>)}
+                {parentOptions.map((parent) => (
+                  <option key={parent.id} value={parent.id}>
+                    {parent.itemType === FOLDER_ITEM_TYPE ? "폴더" : "문서"} · {parent.label}
+                  </option>
+                ))}
               </select>
             </label>
             <div className={styles.folderMoveActions}>
               <button onClick={() => setMovingItemId(null)}>취소</button>
-              <button onClick={moveItem} disabled={pendingId === movingItem.id}>이동</button>
+              <button
+                onClick={moveItem}
+                disabled={pendingId === movingItem.id || (movingItem.parent_id || "") === moveParentId}
+              >이동</button>
             </div>
           </div>
         </>

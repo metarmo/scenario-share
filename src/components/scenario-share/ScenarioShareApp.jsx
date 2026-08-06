@@ -16,8 +16,10 @@ import {
 import {
   DOCUMENT_ITEM_TYPE,
   FOLDER_ITEM_TYPE,
+  canMoveItem,
   countTreeItemTypes,
   isDocument,
+  isFolder,
   isOpenableDocument,
   resolveDocumentAfterDeletion,
   resolveSelectedDocumentId,
@@ -27,10 +29,19 @@ import {
   supabaseEnvironment,
 } from "@/lib/supabase/client";
 import {
+  hasSameScenarioShareUserIdentity,
   isAllowedLoginEmail,
   normalizeLoginEmail,
 } from "@/lib/scenario-share/auth-access.mjs";
-import { clearScenarioShareLocalDocument } from "@/lib/scenario-share/supabase-yjs-provider";
+import {
+  SupabaseYjsProvider,
+  clearScenarioShareLocalDocument,
+} from "@/lib/scenario-share/supabase-yjs-provider";
+import {
+  normalizeDocumentTitle,
+  readSharedDocumentTitle,
+  setSharedDocumentTitle,
+} from "@/lib/scenario-share/yjs-shared-fields.mjs";
 import { CollaborativeDocument } from "./CollaborativeDocument";
 import { MembersModal } from "./MembersModal";
 import { WikiSidebar } from "./WikiSidebar";
@@ -74,6 +85,20 @@ export function ScenarioShareApp() {
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState(null);
   const refreshTimerRef = useRef(null);
+  const activeProviderRef = useRef(null);
+
+  const registerActiveProvider = useCallback((documentId, provider, expectedProvider) => {
+    if (provider) {
+      activeProviderRef.current = { documentId, provider };
+      return;
+    }
+    if (
+      activeProviderRef.current?.documentId === documentId
+      && (!expectedProvider || activeProviderRef.current.provider === expectedProvider)
+    ) {
+      activeProviderRef.current = null;
+    }
+  }, []);
 
   useEffect(() => {
     document.documentElement.lang = "ko";
@@ -114,7 +139,11 @@ export function ScenarioShareApp() {
         return;
       }
 
-      setUser(sessionUser);
+      setUser((currentUser) =>
+        hasSameScenarioShareUserIdentity(currentUser, sessionUser)
+          ? currentUser
+          : sessionUser,
+      );
       setAuthState(sessionUser ? "signed-in" : "signed-out");
       if (!sessionUser) {
         setMembership(null);
@@ -385,25 +414,92 @@ export function ScenarioShareApp() {
 
   const moveItem = async (itemId, parentId = null) => {
     if (!supabase || !membership || membership.role === "viewer") return false;
+    if (!canMoveItem(documents, itemId, parentId)) return false;
     const siblingCount = documents.filter(
       (item) => item.id !== itemId && (item.parent_id || null) === (parentId || null),
     ).length;
-    const { error } = await supabase
+    const { data, error } = await supabase
       .from("documents")
       .update({ parent_id: parentId, sort_order: siblingCount })
-      .eq("id", itemId);
+      .eq("id", itemId)
+      .eq("workspace_id", membership.workspace_id)
+      .select("id,parent_id,sort_order")
+      .maybeSingle();
 
-    if (error) {
-      setNotice({ tone: "error", message: `항목을 이동하지 못했습니다: ${error.message}` });
+    if (error || !data) {
+      setNotice({
+        tone: "error",
+        message: `항목을 이동하지 못했습니다: ${error?.message || "변경 권한을 확인해 주세요."}`,
+      });
       return false;
     }
 
     setDocuments((current) => current.map((item) => (
       item.id === itemId
-        ? { ...item, parent_id: parentId, sort_order: siblingCount }
+        ? { ...item, parent_id: data.parent_id, sort_order: data.sort_order }
         : item
     )));
     return true;
+  };
+
+  const renameItem = async (item, requestedTitle) => {
+    if (!supabase || !membership || !user || membership.role === "viewer") return false;
+    const title = normalizeDocumentTitle(requestedTitle);
+    if (title === item.title) return true;
+
+    if (isFolder(item)) {
+      const { error } = await supabase
+        .from("documents")
+        .update({ title })
+        .eq("id", item.id)
+        .eq("workspace_id", membership.workspace_id);
+      if (error) {
+        setNotice({ tone: "error", message: `폴더 이름을 바꾸지 못했습니다: ${error.message}` });
+        return false;
+      }
+      setDocuments((current) => current.map((currentItem) => (
+        currentItem.id === item.id ? { ...currentItem, title } : currentItem
+      )));
+      return true;
+    }
+
+    const active = activeProviderRef.current;
+    const ownsProvider = active?.documentId !== item.id;
+    const provider = ownsProvider
+      ? new SupabaseYjsProvider({
+        supabase,
+        documentId: item.id,
+        user: { id: user.id },
+        initialTitle: item.title,
+      })
+      : active.provider;
+
+    try {
+      await provider.connect();
+      setSharedDocumentTitle(provider.doc, title);
+      await provider.flush();
+      const mergedTitle = normalizeDocumentTitle(
+        readSharedDocumentTitle(provider.doc, title),
+      );
+      const { error } = await supabase
+        .from("documents")
+        .update({ title: mergedTitle })
+        .eq("id", item.id)
+        .eq("workspace_id", membership.workspace_id);
+      if (error) throw error;
+
+      setDocuments((current) => current.map((currentItem) => (
+        currentItem.id === item.id
+          ? { ...currentItem, title: mergedTitle }
+          : currentItem
+      )));
+      return true;
+    } catch (error) {
+      setNotice({ tone: "error", message: `문서 제목을 바꾸지 못했습니다: ${error.message}` });
+      return false;
+    } finally {
+      if (ownsProvider) await provider.destroy();
+    }
   };
 
   const deleteItem = async (itemId) => {
@@ -657,9 +753,8 @@ export function ScenarioShareApp() {
         onCreate={createItem}
         onMove={moveItem}
         onDelete={deleteItem}
-        onDocumentsChange={setDocuments}
+        onRename={renameItem}
         onClose={() => setSidebarOpen(false)}
-        supabase={supabase}
         workspaceId={membership.workspace_id}
         user={user}
         membership={membership}
@@ -688,6 +783,7 @@ export function ScenarioShareApp() {
             members={members}
             onSelectDocument={setSelectedDocumentId}
             onDocumentPatch={patchDocument}
+            onProviderChange={registerActiveProvider}
             onMembersOpen={() => setMembersOpen(true)}
           />
         ) : (

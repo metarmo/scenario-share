@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  canMoveItem,
   countTreeItemTypes,
   descendantsOf,
   isDocument,
@@ -8,6 +9,7 @@ import {
   isOpenableDocument,
   itemBreadcrumbs,
   movableFolderOptions,
+  movableParentOptions,
   resolveDocumentAfterDeletion,
   resolveSelectedDocumentId,
 } from "./document-tree.mjs";
@@ -76,6 +78,31 @@ test("move targets exclude the item and all descendant folders", () => {
     { id: "folder-a", label: "설정집" },
     { id: "folder-b", label: "설정집 / 인물" },
   ]);
+});
+
+test("documents and folders can both be move parents without allowing cycles", () => {
+  assert.deepEqual(movableParentOptions(items, "doc-b"), [
+    { id: "legacy", itemType: "document", label: "기존 문서" },
+    { id: "folder-a", itemType: "folder", label: "설정집" },
+    { id: "folder-b", itemType: "folder", label: "설정집 / 인물" },
+    { id: "doc-a", itemType: "document", label: "설정집 / 인물 / 주인공" },
+  ]);
+  assert.equal(canMoveItem(items, "doc-b", "doc-a"), true);
+  assert.equal(canMoveItem(items, "folder-a", "doc-a"), false);
+  assert.equal(canMoveItem(items, "doc-a", "folder-b"), false);
+  assert.equal(canMoveItem(items, "doc-a", null), true);
+});
+
+test("items pending deletion cannot be dragged or used as a destination", () => {
+  const pendingItems = items.map((item) => item.id === "doc-a"
+    ? { ...item, deletion_token: "deletion-token" }
+    : item);
+  assert.equal(canMoveItem(pendingItems, "doc-a", null), false);
+  assert.equal(canMoveItem(pendingItems, "doc-b", "doc-a"), false);
+  assert.equal(
+    movableParentOptions(pendingItems, "doc-b").some((option) => option.id === "doc-a"),
+    false,
+  );
 });
 
 test("deleting the selected subtree chooses the next, then previous document", () => {

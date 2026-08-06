@@ -8,10 +8,16 @@ import {
 
 import { bytesToBase64, storedBinaryToBytes } from "./base64.mjs"
 import { ScenarioShareEmitter } from "./emitter.mjs"
+import {
+  hasSharedDocumentTitle,
+  normalizeDocumentTitle,
+  setSharedDocumentTitle,
+} from "./yjs-shared-fields.mjs"
 
 const REMOTE_UPDATE_ORIGIN = Symbol("scenario-share:remote-update")
 const DATABASE_SYNC_ORIGIN = Symbol("scenario-share:database-sync")
 const REMOTE_AWARENESS_ORIGIN = Symbol("scenario-share:remote-awareness")
+const activeProvidersByClient = new WeakMap()
 
 const DEFAULT_TABLES = Object.freeze({
   updates: "document_updates",
@@ -27,6 +33,11 @@ const DEFAULT_COLUMNS = Object.freeze({
   versionId: "id",
   versionState: "yjs_state",
   versionCheckpoint: "last_update_id",
+})
+
+const DEFAULT_RPCS = Object.freeze({
+  loadDocumentSync: "load_document_sync",
+  compactDocumentSync: "compact_document_sync",
 })
 
 export const SCENARIO_SHARE_PROVIDER_STATUS = Object.freeze({
@@ -118,6 +129,26 @@ function sameDatabaseId(left, right) {
   return String(left) === String(right)
 }
 
+function providerRegistryFor(supabase) {
+  let registry = activeProvidersByClient.get(supabase)
+  if (!registry) {
+    registry = new Map()
+    activeProvidersByClient.set(supabase, registry)
+  }
+  return registry
+}
+
+function normalizeRpcPayload(data) {
+  const value = Array.isArray(data) ? data[0] : data
+  return value && typeof value === "object" ? value : null
+}
+
+function isMissingSyncRpcError(error) {
+  if (!error) return false
+  if (["42883", "PGRST202"].includes(error.code)) return true
+  return /function .*document_sync|schema cache/i.test(error.message ?? "")
+}
+
 /**
  * Supabase-backed Yjs provider for ScenarioShare.
  *
@@ -134,6 +165,7 @@ function sameDatabaseId(left, right) {
  * @param {string} options.documentId
  * @param {Y.Doc} [options.document]
  * @param {{id?: string, name?: string, email?: string, avatarUrl?: string, color?: string}} [options.user]
+ * @param {string} [options.initialTitle]
  * @param {string} [options.clientId]
  * @param {string} [options.persistenceName]
  * @param {boolean} [options.disableLocalPersistence]
@@ -144,8 +176,11 @@ function sameDatabaseId(left, right) {
  * @param {number} [options.pageSize]
  * @param {number} [options.subscribeTimeoutMs]
  * @param {number} [options.maxBroadcastBytes]
+ * @param {number} [options.compactionThreshold]
+ * @param {number} [options.compactionDelayMs]
  * @param {{updates?: string, versions?: string}} [options.tables]
  * @param {Partial<typeof DEFAULT_COLUMNS>} [options.columns]
+ * @param {Partial<typeof DEFAULT_RPCS>} [options.rpcs]
  */
 export class SupabaseYjsProvider extends ScenarioShareEmitter {
   constructor(options) {
@@ -160,9 +195,13 @@ export class SupabaseYjsProvider extends ScenarioShareEmitter {
     this.doc = this.document
     this.awareness = new Awareness(this.document)
     this.clientId = options.clientId ?? createUuid()
+    this.initialTitle = options.initialTitle == null
+      ? null
+      : normalizeDocumentTitle(options.initialTitle)
 
     this.tables = { ...DEFAULT_TABLES, ...options.tables }
     this.columns = { ...DEFAULT_COLUMNS, ...options.columns }
+    this.rpcs = { ...DEFAULT_RPCS, ...options.rpcs }
     this.persistenceName =
       options.persistenceName ?? `scenario-share:${this.documentId}`
     this.readOnly = options.readOnly ?? false
@@ -183,10 +222,17 @@ export class SupabaseYjsProvider extends ScenarioShareEmitter {
       options.maxBroadcastBytes ?? 180_000,
       8_192,
     )
+    this.compactionThreshold = clamp(
+      options.compactionThreshold ?? 250,
+      25,
+      5_000,
+    )
+    this.compactionDelayMs = Math.max(options.compactionDelayMs ?? 1_500, 250)
 
     this.user = { ...options.user }
     this.status = SCENARIO_SHARE_PROVIDER_STATUS.IDLE
     this.synced = false
+    this.localReady = false
     this.collaborators = []
 
     this.channel = null
@@ -195,16 +241,22 @@ export class SupabaseYjsProvider extends ScenarioShareEmitter {
     this._hydrating = true
     this._destroyed = false
     this._destroying = false
+    this._destroyPromise = null
     this._connectPromise = null
     this._flushPromise = null
     this._tailSyncPromise = null
+    this._compactionPromise = null
     this._localUpdateBuffer = []
     this._incomingUpdateBuffer = []
     this._outbox = []
+    this._compactionCandidates = new Map()
+    this._snapshotGeneration = 0
+    this._syncRpcAvailable = null
     this._clientSequence = 0
     this._retryAttempt = 0
     this._retryTimer = null
     this._batchTimer = null
+    this._compactionTimer = null
     this._awarenessTimer = null
     this._awarenessHeartbeatTimer = null
     this._peerYClients = new Map()
@@ -244,15 +296,35 @@ export class SupabaseYjsProvider extends ScenarioShareEmitter {
     this._setStatus(SCENARIO_SHARE_PROVIDER_STATUS.CONNECTING)
 
     try {
+      // IndexedDB can make a previously opened document editable while auth and
+      // the private Realtime channel are still warming up. Database hydration
+      // still starts only after subscribe, preserving the query-subscribe race
+      // protection below.
+      const localPersistencePromise = this._openLocalPersistence().then(
+        (localState) => {
+          if (this._destroyed || this._destroying) return localState
+          this.localReady = true
+          this.emit("local-ready", {
+            documentId: this.documentId,
+            ...localState,
+          })
+          return localState
+        },
+      )
+
       await this._resolveAuthenticatedUser()
-      this._createChannel()
-      await this._subscribe()
+      await this._createChannel()
+      if (this._destroyed || this._destroying) {
+        throw new Error("ScenarioShare provider was destroyed while connecting")
+      }
+      await Promise.all([this._subscribe(), localPersistencePromise])
 
       // Subscribe first so broadcasts arriving during IndexedDB/DB hydration are
       // buffered rather than falling into a query-subscribe race window.
       this._setStatus(SCENARIO_SHARE_PROVIDER_STATUS.SYNCING)
-      await this._openLocalPersistence()
-      const restored = await this._loadStableServerDocument()
+      const restored = await this._loadServerDocument()
+      this._recordRestoredMetadata(restored)
+      await this._initializeSharedTitle(restored.document)
       this._finishInitialMerge(restored.document)
       restored.document.destroy()
 
@@ -275,6 +347,7 @@ export class SupabaseYjsProvider extends ScenarioShareEmitter {
 
       this._setStatus(SCENARIO_SHARE_PROVIDER_STATUS.CONNECTED)
       await this.flush().catch((error) => this._scheduleRetry(error))
+      this._scheduleCompactionIfNeeded()
       return this
     } catch (error) {
       this._channelReady = false
@@ -340,44 +413,87 @@ export class SupabaseYjsProvider extends ScenarioShareEmitter {
     })
   }
 
-  _createChannel() {
+  async _createChannel() {
     if (this.channel) return
 
-    this.channel = this.supabase.channel(`doc:${this.documentId}`, {
-      config: {
-        private: true,
-        broadcast: { ack: true, self: false },
-        presence: { key: this.clientId },
-      },
-    })
+    const channelName = `doc:${this.documentId}`
+    const registry = providerRegistryFor(this.supabase)
 
-    this.channel
-      .on("broadcast", { event: "y-update" }, (message) => {
-        this._receiveYUpdate(message)
-      })
-      .on("broadcast", { event: "awareness" }, (message) => {
-        this._receiveAwareness(message)
-      })
-      .on("broadcast", { event: "awareness-request" }, (message) => {
-        this._receiveAwarenessRequest(message)
-      })
-      .on("presence", { event: "sync" }, () => {
-        this._publishCollaborators()
-      })
-      .on("presence", { event: "join" }, ({ newPresences }) => {
-        this._publishCollaborators()
-        for (const presence of newPresences ?? []) {
-          if (presence.clientId && presence.clientId !== this.clientId) {
-            void this._sendAwarenessRequest(presence.clientId).catch((error) => {
-              this._emitOperationalError("awareness-request", error)
-            })
-          }
+    // A token refresh or React remount can start a replacement provider before
+    // the previous async cleanup has removed its channel. Supabase 2.111+
+    // reuses a channel with the same topic, so wait for the previous owner
+    // instead of registering Presence callbacks on an already joined channel.
+    while (true) {
+      const previousProvider = registry.get(channelName)
+      if (!previousProvider || previousProvider === this) break
+      await previousProvider.destroy()
+    }
+
+    if (this._destroyed || this._destroying) {
+      throw new Error("Cannot create a channel for a destroyed ScenarioShare provider")
+    }
+    registry.set(channelName, this)
+
+    try {
+      // Clean up an orphaned channel left by an interrupted hot reload or by a
+      // provider created before this module-level registry was initialized.
+      const existingChannels = this.supabase.getChannels?.() ?? []
+      for (const existingChannel of existingChannels) {
+        if (
+          existingChannel?.topic === channelName ||
+          existingChannel?.topic === `realtime:${channelName}`
+        ) {
+          await this.supabase.removeChannel(existingChannel)
         }
+      }
+
+      if (this._destroyed || this._destroying) {
+        throw new Error("ScenarioShare provider was destroyed before channel creation")
+      }
+
+      this.channel = this.supabase.channel(channelName, {
+        config: {
+          private: true,
+          broadcast: { ack: true, self: false },
+          presence: { key: this.clientId },
+        },
       })
-      .on("presence", { event: "leave" }, ({ leftPresences }) => {
-        this._removeDepartedAwareness(leftPresences ?? [])
-        this._publishCollaborators()
-      })
+
+      this.channel
+        .on("broadcast", { event: "y-update" }, (message) => {
+          this._receiveYUpdate(message)
+        })
+        .on("broadcast", { event: "awareness" }, (message) => {
+          this._receiveAwareness(message)
+        })
+        .on("broadcast", { event: "awareness-request" }, (message) => {
+          this._receiveAwarenessRequest(message)
+        })
+        .on("presence", { event: "sync" }, () => {
+          this._publishCollaborators()
+        })
+        .on("presence", { event: "join" }, ({ newPresences }) => {
+          this._publishCollaborators()
+          for (const presence of newPresences ?? []) {
+            if (presence.clientId && presence.clientId !== this.clientId) {
+              void this._sendAwarenessRequest(presence.clientId).catch((error) => {
+                this._emitOperationalError("awareness-request", error)
+              })
+            }
+          }
+        })
+        .on("presence", { event: "leave" }, ({ leftPresences }) => {
+          this._removeDepartedAwareness(leftPresences ?? [])
+          this._publishCollaborators()
+        })
+    } catch (error) {
+      if (registry.get(channelName) === this) registry.delete(channelName)
+      if (this.channel) {
+        await this.supabase.removeChannel(this.channel).catch(() => null)
+        this.channel = null
+      }
+      throw error
+    }
   }
 
   async _subscribe() {
@@ -446,10 +562,15 @@ export class SupabaseYjsProvider extends ScenarioShareEmitter {
   }
 
   async _openLocalPersistence() {
-    if (this.disableLocalPersistence) return
+    const localState = (available) => ({
+      available,
+      hasLocalState: !isEmptyYjsUpdate(Y.encodeStateAsUpdate(this.document)),
+    })
+
+    if (this.disableLocalPersistence) return localState(false)
     if (this.persistence) {
       await this.persistence.whenSynced
-      return
+      return localState(true)
     }
 
     if (typeof globalThis.indexedDB === "undefined") {
@@ -457,7 +578,7 @@ export class SupabaseYjsProvider extends ScenarioShareEmitter {
         "indexeddb",
         new Error("IndexedDB is unavailable; continuing without local persistence"),
       )
-      return
+      return localState(false)
     }
 
     try {
@@ -467,9 +588,73 @@ export class SupabaseYjsProvider extends ScenarioShareEmitter {
         this.document,
       )
       await this.persistence.whenSynced
+      return localState(true)
     } catch (error) {
       this.persistence = null
       this._emitOperationalError("indexeddb", error)
+      return localState(false)
+    }
+  }
+
+  async _loadServerDocument() {
+    if (
+      this._syncRpcAvailable !== false &&
+      typeof this.supabase.rpc === "function"
+    ) {
+      const { data, error } = await this.supabase.rpc(
+        this.rpcs.loadDocumentSync,
+        { p_document_id: this.documentId },
+      )
+
+      if (!error) {
+        const payload = normalizeRpcPayload(data)
+        if (!payload) throw new Error("Document sync RPC returned no payload")
+
+        const serverDocument = new Y.Doc()
+        if (payload.snapshot_state) {
+          Y.applyUpdate(
+            serverDocument,
+            storedBinaryToBytes(payload.snapshot_state),
+            DATABASE_SYNC_ORIGIN,
+          )
+        }
+
+        const rows = Array.isArray(payload.updates) ? payload.updates : []
+        const updateIds = []
+        for (const row of rows) {
+          if (!row?.yjs_update) continue
+          Y.applyUpdate(
+            serverDocument,
+            storedBinaryToBytes(row.yjs_update),
+            DATABASE_SYNC_ORIGIN,
+          )
+          if (row.id != null) updateIds.push(row.id)
+        }
+
+        this._syncRpcAvailable = true
+        return {
+          document: serverDocument,
+          checkpointId:
+            payload.checkpoint_id ?? updateIds.at(-1) ?? null,
+          versionId: payload.source_version_id ?? null,
+          snapshotGeneration: Number(payload.snapshot_generation ?? 0),
+          updateIds,
+          syncRpc: true,
+        }
+      }
+
+      if (!isMissingSyncRpcError(error)) throw error
+      // Keep the app usable while a new migration is being rolled out. Once the
+      // RPC exists, new provider instances use the fast path automatically.
+      this._syncRpcAvailable = false
+    }
+
+    const restored = await this._loadStableServerDocument()
+    return {
+      ...restored,
+      snapshotGeneration: null,
+      updateIds: [],
+      syncRpc: false,
     }
   }
 
@@ -578,11 +763,107 @@ export class SupabaseYjsProvider extends ScenarioShareEmitter {
     return { rows, lastUpdateId }
   }
 
+  _rememberCompactionCandidate(updateId) {
+    if (updateId == null) return
+    this._compactionCandidates.set(String(updateId), updateId)
+  }
+
+  _recordRestoredMetadata(restored) {
+    if (!restored?.syncRpc) return
+
+    const nextGeneration = Number(restored.snapshotGeneration ?? 0)
+    if (nextGeneration !== this._snapshotGeneration) {
+      this._compactionCandidates.clear()
+    }
+    this._snapshotGeneration = nextGeneration
+    for (const updateId of restored.updateIds ?? []) {
+      this._rememberCompactionCandidate(updateId)
+    }
+  }
+
+  async _initializeSharedTitle(serverDocument) {
+    if (
+      this.readOnly
+      || this.initialTitle == null
+      || hasSharedDocumentTitle(serverDocument)
+      || hasSharedDocumentTitle(this.document)
+    ) {
+      return
+    }
+
+    // Existing documents predate the shared title field. Every client may race
+    // to create the same field, so persist one candidate under a reserved,
+    // document-scoped update identity and apply whichever candidate won.
+    const seedDocument = new Y.Doc()
+    setSharedDocumentTitle(seedDocument, this.initialTitle, DATABASE_SYNC_ORIGIN)
+    const candidate = Y.encodeStateAsUpdate(seedDocument)
+    const row = {
+      [this.columns.documentId]: this.documentId,
+      [this.columns.updateData]: bytesToBase64(candidate),
+      [this.columns.updateClientId]: this.documentId,
+      [this.columns.updateClientSequence]: 0,
+    }
+
+    try {
+      const insertQuery = this.supabase.from(this.tables.updates).insert(row)
+      let result
+      if (typeof insertQuery?.select === "function") {
+        const selected = insertQuery.select(
+          [this.columns.updateId, this.columns.updateData].join(","),
+        )
+        result = typeof selected?.single === "function"
+          ? await selected.single()
+          : await selected
+      } else {
+        result = await insertQuery
+      }
+
+      let persisted = Array.isArray(result.data) ? result.data[0] : result.data
+      if (result.error?.code === "23505") {
+        const duplicate = await this.supabase
+          .from(this.tables.updates)
+          .select([this.columns.updateId, this.columns.updateData].join(","))
+          .eq(this.columns.documentId, this.documentId)
+          .eq(this.columns.updateClientId, this.documentId)
+          .eq(this.columns.updateClientSequence, 0)
+          .limit(1)
+        if (duplicate.error) throw duplicate.error
+        persisted = duplicate.data?.[0]
+      } else if (result.error) {
+        throw result.error
+      }
+
+      if (!persisted?.[this.columns.updateData]) {
+        throw new Error("Shared title initialization returned no persisted update")
+      }
+
+      const persistedUpdate = storedBinaryToBytes(
+        persisted[this.columns.updateData],
+      )
+      Y.applyUpdate(serverDocument, persistedUpdate, DATABASE_SYNC_ORIGIN)
+      const updateId = persisted[this.columns.updateId] ?? null
+      this._rememberCompactionCandidate(updateId)
+      // Reuse the normal retrying outbox for low-latency delivery. The update is
+      // already durable, so a failed Broadcast must not make initialization lose
+      // the title or attempt a second insert.
+      this._outbox.push({
+        update: persistedUpdate,
+        sequence: 0,
+        persisted: true,
+        updateId,
+      })
+    } finally {
+      seedDocument.destroy()
+    }
+  }
+
   _finishInitialMerge(serverDocument) {
     // Broadcasts received while loading Postgres/IndexedDB are applied to the
     // temporary server doc before the state-vector merge.
-    for (const update of this._incomingUpdateBuffer.splice(0)) {
+    for (const buffered of this._incomingUpdateBuffer.splice(0)) {
+      const update = buffered?.update ?? buffered
       Y.applyUpdate(serverDocument, update, REMOTE_UPDATE_ORIGIN)
+      this._rememberCompactionCandidate(buffered?.updateId)
     }
 
     const serverDiff = Y.encodeStateAsUpdate(
@@ -688,19 +969,9 @@ export class SupabaseYjsProvider extends ScenarioShareEmitter {
       const item = this._outbox[0]
 
       if (!item.persisted) {
-        const row = {
-          [this.columns.documentId]: this.documentId,
-          [this.columns.updateData]: bytesToBase64(item.update),
-          [this.columns.updateClientId]: this.clientId,
-          [this.columns.updateClientSequence]: item.sequence,
-        }
-        const { error } = await this.supabase.from(this.tables.updates).insert(row)
-
-        // An ambiguous network failure may have committed the insert. The
-        // unique(document_id, client_id, client_seq) constraint makes retries
-        // idempotent; a duplicate therefore counts as persisted.
-        if (error && error.code !== "23505") throw error
+        item.updateId = await this._persistOutboxItem(item)
         item.persisted = true
+        this._rememberCompactionCandidate(item.updateId)
       }
 
       if (!this._channelReady) {
@@ -712,6 +983,7 @@ export class SupabaseYjsProvider extends ScenarioShareEmitter {
         clientId: this.clientId,
         clientSeq: item.sequence,
         createdBy: this.user.id,
+        updateId: item.updateId ?? null,
         ...(isOversized
           ? { reload: true }
           : { update: bytesToBase64(item.update) }),
@@ -720,6 +992,7 @@ export class SupabaseYjsProvider extends ScenarioShareEmitter {
       this._outbox.shift()
       this._retryAttempt = 0
       this._emitPendingState()
+      this._scheduleCompactionIfNeeded()
     }
 
     if (this._retryTimer) {
@@ -729,6 +1002,45 @@ export class SupabaseYjsProvider extends ScenarioShareEmitter {
     if (this.synced && this._channelReady) {
       this._setStatus(SCENARIO_SHARE_PROVIDER_STATUS.CONNECTED)
     }
+  }
+
+  async _persistOutboxItem(item) {
+    const row = {
+      [this.columns.documentId]: this.documentId,
+      [this.columns.updateData]: bytesToBase64(item.update),
+      [this.columns.updateClientId]: this.clientId,
+      [this.columns.updateClientSequence]: item.sequence,
+    }
+    const insertQuery = this.supabase.from(this.tables.updates).insert(row)
+    let result
+    if (typeof insertQuery?.select === "function") {
+      const selected = insertQuery.select(this.columns.updateId)
+      result =
+        typeof selected?.single === "function"
+          ? await selected.single()
+          : await selected
+    } else {
+      result = await insertQuery
+    }
+
+    // An ambiguous network failure may have committed the insert. The
+    // unique(document_id, client_id, client_seq) constraint makes retries
+    // idempotent; look up the committed identity before broadcasting it.
+    if (result.error?.code === "23505") {
+      const { data, error } = await this.supabase
+        .from(this.tables.updates)
+        .select(this.columns.updateId)
+        .eq(this.columns.documentId, this.documentId)
+        .eq(this.columns.updateClientId, this.clientId)
+        .eq(this.columns.updateClientSequence, item.sequence)
+        .limit(1)
+      if (error) throw error
+      return data?.[0]?.[this.columns.updateId] ?? null
+    }
+    if (result.error) throw result.error
+
+    const inserted = Array.isArray(result.data) ? result.data[0] : result.data
+    return inserted?.[this.columns.updateId] ?? null
   }
 
   _receiveYUpdate(message) {
@@ -745,9 +1057,14 @@ export class SupabaseYjsProvider extends ScenarioShareEmitter {
 
       const update = storedBinaryToBytes(payload.update)
       if (this._hydrating) {
-        this._incomingUpdateBuffer.push(update)
+        this._incomingUpdateBuffer.push({
+          update,
+          updateId: payload.updateId ?? null,
+        })
       } else {
         Y.applyUpdate(this.document, update, REMOTE_UPDATE_ORIGIN)
+        this._rememberCompactionCandidate(payload.updateId)
+        this._scheduleCompactionIfNeeded()
       }
     } catch (error) {
       this._emitOperationalError("y-update", error)
@@ -931,11 +1248,104 @@ export class SupabaseYjsProvider extends ScenarioShareEmitter {
     }
   }
 
+  _scheduleCompactionIfNeeded(delayMs = this.compactionDelayMs) {
+    if (
+      this.readOnly ||
+      !this.synced ||
+      this._destroyed ||
+      this._destroying ||
+      this._syncRpcAvailable !== true ||
+      this._compactionCandidates.size < this.compactionThreshold ||
+      this._compactionTimer ||
+      this._compactionPromise
+    ) {
+      return
+    }
+
+    this._compactionTimer = setTimeout(() => {
+      this._compactionTimer = null
+      void this._compactDocument().catch((error) => {
+        this._emitOperationalError("snapshot-compaction", error)
+        this._scheduleCompactionIfNeeded(10_000)
+      })
+    }, delayMs)
+  }
+
+  async _compactDocument() {
+    if (this._compactionPromise) return this._compactionPromise
+    if (
+      this.readOnly ||
+      !this.synced ||
+      this._destroyed ||
+      this._destroying ||
+      this._syncRpcAvailable !== true ||
+      this._compactionCandidates.size < this.compactionThreshold
+    ) {
+      return null
+    }
+
+    const candidates = [...this._compactionCandidates.entries()].slice(0, 20_000)
+    const expectedGeneration = this._snapshotGeneration
+    const snapshotState = bytesToBase64(Y.encodeStateAsUpdate(this.document))
+
+    const run = (async () => {
+      const { data, error } = await this.supabase.rpc(
+        this.rpcs.compactDocumentSync,
+        {
+          p_document_id: this.documentId,
+          p_expected_generation: expectedGeneration,
+          p_yjs_state: snapshotState,
+          p_update_ids: candidates.map(([, updateId]) => updateId),
+        },
+      )
+
+      if (error) {
+        if (isMissingSyncRpcError(error)) this._syncRpcAvailable = false
+        throw error
+      }
+
+      const payload = normalizeRpcPayload(data)
+      if (!payload) throw new Error("Document compaction RPC returned no payload")
+
+      if (payload.status === "compacted") {
+        this._snapshotGeneration = Number(
+          payload.snapshot_generation ?? expectedGeneration + 1,
+        )
+        for (const [key] of candidates) this._compactionCandidates.delete(key)
+        this.emit("compacted", {
+          documentId: this.documentId,
+          compactedUpdates: Number(payload.compacted_count ?? candidates.length),
+          snapshotGeneration: this._snapshotGeneration,
+        })
+        return payload
+      }
+
+      if (payload.status === "stale" || payload.status === "updates_changed") {
+        await this._catchUpFromDatabase()
+        return payload
+      }
+
+      throw new Error(`Unexpected document compaction status: ${payload.status}`)
+    })()
+
+    this._compactionPromise = run
+    let completed = false
+    try {
+      const result = await run
+      completed = true
+      return result
+    } finally {
+      if (this._compactionPromise === run) this._compactionPromise = null
+      if (completed) this._scheduleCompactionIfNeeded()
+    }
+  }
+
   async _catchUpFromDatabase() {
     if (this._tailSyncPromise) return this._tailSyncPromise
 
     const run = (async () => {
-      const restored = await this._loadStableServerDocument()
+      const restored = await this._loadServerDocument()
+      this._recordRestoredMetadata(restored)
       const serverDiff = Y.encodeStateAsUpdate(
         restored.document,
         Y.encodeStateVector(this.document),
@@ -944,6 +1354,7 @@ export class SupabaseYjsProvider extends ScenarioShareEmitter {
         Y.applyUpdate(this.document, serverDiff, DATABASE_SYNC_ORIGIN)
       }
       restored.document.destroy()
+      this._scheduleCompactionIfNeeded()
       return {
         checkpointId: restored.checkpointId,
         versionId: restored.versionId,
@@ -1027,11 +1438,18 @@ export class SupabaseYjsProvider extends ScenarioShareEmitter {
   }
 
   /** Flush pending edits and tear down Realtime, Awareness, and IndexedDB. */
-  async destroy() {
-    if (this._destroyed || this._destroying) return
+  destroy() {
+    if (this._destroyed) return this._destroyPromise ?? Promise.resolve()
+    if (this._destroyPromise) return this._destroyPromise
+    this._destroyPromise = this._destroy()
+    return this._destroyPromise
+  }
+
+  async _destroy() {
     this._destroying = true
 
     if (this._batchTimer) clearTimeout(this._batchTimer)
+    if (this._compactionTimer) clearTimeout(this._compactionTimer)
     if (this._retryTimer) clearTimeout(this._retryTimer)
     if (this._awarenessTimer) clearTimeout(this._awarenessTimer)
     if (this._awarenessHeartbeatTimer) {
@@ -1080,8 +1498,12 @@ export class SupabaseYjsProvider extends ScenarioShareEmitter {
     this.awareness.destroy()
 
     this.synced = false
+    this.localReady = false
     this._destroyed = true
     this._destroying = false
+    const registry = providerRegistryFor(this.supabase)
+    const channelName = `doc:${this.documentId}`
+    if (registry.get(channelName) === this) registry.delete(channelName)
     this._setStatus(SCENARIO_SHARE_PROVIDER_STATUS.DESTROYED)
     this.emit("destroy", undefined)
     this.removeAllListeners()

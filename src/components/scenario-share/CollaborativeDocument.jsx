@@ -29,6 +29,14 @@ import {
 } from "react-icons/lu";
 import { isFolder } from "@/lib/scenario-share/document-tree.mjs";
 import { SupabaseYjsProvider } from "@/lib/scenario-share/supabase-yjs-provider";
+import {
+  MAX_DOCUMENT_TITLE_LENGTH,
+  SCENARIO_SHARE_YJS_FIELDS,
+  hasSharedDocumentTitle,
+  normalizeDocumentTitle,
+  readSharedDocumentTitle,
+  setSharedDocumentTitle,
+} from "@/lib/scenario-share/yjs-shared-fields.mjs";
 import { CommentsPanel } from "./CommentsPanel";
 import { EditorToolbar } from "./EditorToolbar";
 import { VersionDrawer } from "./VersionDrawer";
@@ -60,9 +68,11 @@ export function CollaborativeDocument({
   members,
   onSelectDocument,
   onDocumentPatch,
+  onProviderChange,
   onMembersOpen,
 }) {
   const [provider, setProvider] = useState(null);
+  const [localReady, setLocalReady] = useState(false);
   const [synced, setSynced] = useState(false);
   const [providerStatus, setProviderStatus] = useState("connecting");
   const [providerPending, setProviderPending] = useState(false);
@@ -79,7 +89,7 @@ export function CollaborativeDocument({
   const [versionState, setVersionState] = useState(null);
   const [followUserId, setFollowUserId] = useState(null);
   const titleTimerRef = useRef(null);
-  const titleDirtyRef = useRef(false);
+  const initialTitleRef = useRef(document.title);
   const readOnly = membership.role === "viewer";
   const profile = useMemo(() => profileFromUser(user), [user]);
   const realtimeUser = useMemo(
@@ -90,7 +100,7 @@ export function CollaborativeDocument({
       avatarUrl: profile.avatar,
       color: profile.color || colorForUser(user.id),
     }),
-    [profile, user.id],
+    [profile.avatar, profile.color, profile.email, profile.name, user.id],
   );
   const breadcrumbs = useMemo(
     () => documentBreadcrumbs(documents, document.id),
@@ -104,7 +114,9 @@ export function CollaborativeDocument({
       documentId: document.id,
       user: realtimeUser,
       readOnly,
+      initialTitle: initialTitleRef.current,
     });
+    onProviderChange?.(document.id, instance);
 
     const handleStatus = (event) => {
       if (!active) return;
@@ -115,15 +127,25 @@ export function CollaborativeDocument({
     const handleSynced = () => {
       if (!active) return;
       setProvider(instance);
+      setLocalReady(true);
       setSynced(true);
       setProviderStatus("connected");
+    };
+    const handleLocalReady = (event) => {
+      if (!active || !event?.hasLocalState) return;
+      setProvider(instance);
+      setLocalReady(true);
     };
     const handlePending = (event) => {
       if (!active) return;
       setProviderPending(Boolean(event?.bufferedUpdates || event?.outboxEntries));
     };
     const handleError = (event) => {
-      if (!active || event?.operation === "indexeddb") return;
+      if (
+        !active ||
+        event?.operation === "indexeddb" ||
+        event?.operation === "snapshot-compaction"
+      ) return;
       setProviderError(event?.message || event?.error?.message || "실시간 연결에 문제가 생겼습니다.");
     };
     const handleCollaborators = (next) => {
@@ -145,6 +167,7 @@ export function CollaborativeDocument({
     };
 
     instance.on("status", handleStatus);
+    instance.on("local-ready", handleLocalReady);
     instance.on("synced", handleSynced);
     instance.on("pending", handlePending);
     instance.on("error", handleError);
@@ -161,41 +184,69 @@ export function CollaborativeDocument({
     return () => {
       active = false;
       instance.off("status", handleStatus);
+      instance.off("local-ready", handleLocalReady);
       instance.off("synced", handleSynced);
       instance.off("pending", handlePending);
       instance.off("error", handleError);
       instance.off("collaborators", handleCollaborators);
+      onProviderChange?.(document.id, null, instance);
       void instance.destroy();
     };
-  }, [document.id, readOnly, realtimeUser, supabase]);
+  }, [document.id, onProviderChange, readOnly, realtimeUser, supabase]);
 
   useEffect(() => {
-    if (titleDirtyRef.current) return undefined;
-    const task = window.setTimeout(
-      () => setTitle(document.title || "제목 없는 문서"),
-      0,
-    );
-    return () => window.clearTimeout(task);
-  }, [document.id, document.title]);
-
-  useEffect(() => {
-    if (!titleDirtyRef.current || readOnly) return undefined;
-    if (title === document.title) {
-      titleDirtyRef.current = false;
-      return undefined;
+    if (!provider) {
+      const task = window.setTimeout(
+        () => setTitle(normalizeDocumentTitle(document.title)),
+        0,
+      );
+      return () => window.clearTimeout(task);
     }
+
+    const sharedTitle = provider.doc.getText(SCENARIO_SHARE_YJS_FIELDS.title);
+    const syncTitle = () => {
+      setTitle(readSharedDocumentTitle(provider.doc, document.title));
+    };
+    const task = window.setTimeout(syncTitle, 0);
+    sharedTitle.observe(syncTitle);
+    return () => {
+      window.clearTimeout(task);
+      sharedTitle.unobserve(syncTitle);
+    };
+  }, [document.id, document.title, provider]);
+
+  useEffect(() => {
+    if (
+      !provider
+      || !synced
+      || readOnly
+      || !hasSharedDocumentTitle(provider.doc)
+    ) return undefined;
+    if (!title.trim()) return undefined;
+    const nextTitle = normalizeDocumentTitle(title);
+    if (nextTitle === document.title) return undefined;
+
+    let active = true;
     window.clearTimeout(titleTimerRef.current);
     titleTimerRef.current = window.setTimeout(async () => {
-      const nextTitle = title.trim() || "제목 없는 문서";
+      try {
+        await provider.flush();
+      } catch (error) {
+        if (active) setSaveError(`제목 동기화 실패: ${error.message}`);
+        return;
+      }
       const { error } = await supabase.from("documents").update({ title: nextTitle }).eq("id", document.id);
-      if (error) setSaveError(`제목 저장 실패: ${error.message}`);
+      if (!active) return;
+      if (error) setSaveError(`제목 색인 저장 실패: ${error.message}`);
       else {
-        titleDirtyRef.current = false;
         onDocumentPatch(document.id, { title: nextTitle });
       }
     }, 650);
-    return () => window.clearTimeout(titleTimerRef.current);
-  }, [document.id, document.title, onDocumentPatch, readOnly, supabase, title]);
+    return () => {
+      active = false;
+      window.clearTimeout(titleTimerRef.current);
+    };
+  }, [document.id, document.title, onDocumentPatch, provider, readOnly, supabase, synced, title]);
 
   const loadVersions = useCallback(async () => {
     setVersionState("loading");
@@ -225,9 +276,16 @@ export function CollaborativeDocument({
     setSaving(true);
     setSaveError(null);
     try {
+      const currentTitle = readSharedDocumentTitle(provider.doc, title);
+      const normalizedTitle = normalizeDocumentTitle(titleOverride ?? currentTitle);
+      if (currentTitle !== normalizedTitle) {
+        setSharedDocumentTitle(provider.doc, normalizedTitle);
+      }
       await provider.flush();
       const snapshot = await provider.syncForVersion();
-      const savedTitle = (titleOverride ?? title).trim() || "제목 없는 문서";
+      const savedTitle = normalizeDocumentTitle(
+        readSharedDocumentTitle(provider.doc, normalizedTitle),
+      );
       const content = editor.getJSON();
       const plainText = editor.getText({ blockSeparator: "\n" });
       const { data: version, error: versionError } = await supabase
@@ -249,7 +307,6 @@ export function CollaborativeDocument({
         .update({ title: savedTitle, plain_text: plainText })
         .eq("id", document.id);
       if (documentError) throw documentError;
-      titleDirtyRef.current = false;
       setDirty(false);
       setProviderPending(false);
       onDocumentPatch(document.id, { title: savedTitle, plain_text: plainText, updated_at: new Date().toISOString() });
@@ -264,14 +321,13 @@ export function CollaborativeDocument({
   }, [document.id, editor, onDocumentPatch, provider, readOnly, saving, supabase, title]);
 
   const restoreVersion = async (version) => {
-    if (!editor || readOnly) return;
+    if (!editor || !provider || readOnly) return;
     setVersionState(version.id);
     setSaveError(null);
     try {
       editor.commands.setContent(version.content || EMPTY_DOC, { emitUpdate: true });
       const restoredTitle = version.title || "제목 없는 문서";
-      titleDirtyRef.current = true;
-      setTitle(restoredTitle);
+      setSharedDocumentTitle(provider.doc, normalizeDocumentTitle(restoredTitle));
       setDirty(true);
       await new Promise((resolve) => window.requestAnimationFrame(resolve));
       const restored = await saveVersion({
@@ -397,23 +453,25 @@ export function CollaborativeDocument({
             <div className={styles.documentTitleArea}>
               <input
                 value={title}
-                readOnly={readOnly}
+                readOnly={readOnly || !provider}
+                maxLength={MAX_DOCUMENT_TITLE_LENGTH}
                 onChange={(event) => {
-                  titleDirtyRef.current = true;
-                  setTitle(event.target.value);
+                  if (!provider || readOnly) return;
+                  setSharedDocumentTitle(provider.doc, event.target.value);
                   setDirty(true);
                 }}
                 onBlur={() => {
-                  if (!title.trim()) {
-                    titleDirtyRef.current = true;
-                    setTitle("제목 없는 문서");
-                  }
+                  if (!provider || readOnly) return;
+                  const normalizedTitle = normalizeDocumentTitle(
+                    readSharedDocumentTitle(provider.doc, document.title),
+                  );
+                  setSharedDocumentTitle(provider.doc, normalizedTitle);
                 }}
                 placeholder="문서 제목"
                 aria-label="문서 제목"
               />
             </div>
-            {!synced || !provider ? (
+            {(!localReady && !synced) || !provider ? (
               <div className={styles.editorLoading}>
                 <div className={styles.editorLoadingIcon}><LuCloud /><span /></div>
                 <strong>최신 문서를 동기화하고 있습니다</strong>
